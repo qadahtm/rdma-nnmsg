@@ -2,7 +2,6 @@
 #include <string.h>
 #include "rdma_.h"
 
-#define NODE_CNT 5
 
 int main(int argc, char *argv[]){
     if(argc < 2){
