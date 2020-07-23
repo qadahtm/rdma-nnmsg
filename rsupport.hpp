@@ -10,6 +10,8 @@
 
 #define NODE_CNT 5
 #define TX_DEPTH 2048
+#define PRIMARY_IB_PORT 1
+#define KB 1024
 
 #define CPE(val, msg, err_code)                    \
     if (val)                                       \
@@ -19,9 +21,27 @@
         exit(err_code);                            \
     }
 
+//These are the memory regions
+volatile  int64_t **req_area, **resp_area, **local_read;
+
+//Registered memory
+struct ibv_mr **req_area_mr, **resp_area_mr, **local_read_mr;
+
+
+//Following are the functions to support RDMA operations:
 union ibv_gid get_gid(struct ibv_context *context);
 uint16_t get_local_lid(struct ibv_context *context);
 static int poll_cq(struct ibv_cq *cq, int num_completions);
+//TO DO:
+static void destroy_ctx(struct context *ctx);
+static int tcp_exchange_qp_info();
+//Done:
+int setup_buffers(struct context *ctx);
+static int qp_to_rtr(struct ibv_qp *qp, struct context *ctx);
+static int qp_to_rts(struct ibv_qp *qp, struct context *ctx);
+void post_recv(struct context *ctx, int num_recvs, int qpn, volatile int64_t  *local_addr, int local_key, int size);
+void post_send(struct context *ctx, int qpn, volatile int64_t *local_addr, int local_key, int signal, int size);
+
 
 struct stag
 {
@@ -29,6 +49,9 @@ struct stag
     void *buf;
     uint64_t size;
 } node_stags[NODE_CNT];
+
+//Stag for response and request
+struct stag req_area_stag[NODE_CNT], resp_area_stag[NODE_CNT];
 
 struct qp_attr
 {
@@ -59,8 +82,7 @@ struct context
     int sock_port;
 };
 
-static struct context *init_ctx(struct context *ctx,
-                                struct ibv_device *ib_dev)
+static struct context *init_ctx(struct context *ctx, struct ibv_device *ib_dev)
 {
     ctx->context = ibv_open_device(ib_dev);
     CPE(!ctx->context, "Couldn't get context", 0);
@@ -113,21 +135,20 @@ void create_qp(struct context *ctx)
 
 void qp_to_init(struct context* ctx)
 {
-    for(int i = 0; i < ctx->num_conns; i++){
-        struct ibv_qp_attr *attr;
-        attr = (ibv_qp_attr *) malloc(sizeof(*attr));
-        memset(attr, 0, sizeof(*attr));
-        attr->qp_state = IBV_QPS_INIT;
-        attr->pkey_index = 0;
-        attr->port_num = ctx->sock_port;
-        attr->qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+    struct ibv_qp_attr *attr;
+    attr = (ibv_qp_attr *) malloc(sizeof(*attr));
+    memset(attr, 0, sizeof(*attr));
+    attr->qp_state = IBV_QPS_INIT;
+    attr->pkey_index = 0;
+    attr->port_num = PRIMARY_IB_PORT;
+    attr->qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
 
+    for(int i = 0; i < ctx->num_conns; i++){
         ibv_modify_qp(ctx->qp[i], attr,
                     IBV_QP_STATE |
                         IBV_QP_PKEY_INDEX |
                         IBV_QP_PORT |
                         IBV_QP_ACCESS_FLAGS);
-        free(attr);
     }
 }
 
@@ -166,44 +187,26 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
     }
 }
 
-//TO DO:
-static void destroy_ctx(struct context *ctx);
-static int tcp_exchange_qp_info();
-// static int tcp_exchange_qp_info(struct application_data *data)
-// {
-//     char msg[sizeof("0000:000000:000000:00000000:0000000000000000")];
-//     int parsed;
-//     int rc;
-//     struct connection_attr *local = &data->local_con_info;
-//     sprintf(msg, "%04x:%06x:%06x:%08x:%016Lx",
-//             local->lid, local->qpn, local->psn, local->rkey, local->vaddr);
-//     while (rc != sizeof(msg))
-//     {
-//         rc = nn_send(data->sockfd, msg, sizeof(msg), NN_DONTWAIT);
-//     }
-//     if (rc != sizeof(msg))
-//     {
-//         rc = nn_recv(data->sockfd, msg, sizeof(msg), NN_DONTWAIT);
-//     }
+int setup_buffers(struct context* ctx){
+    int FLAGS = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | 
+				IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+    
+    for(int i=0;i<NODE_CNT;i++){
+        resp_area[i] = (int64_t *) memalign(65536, 256 * KB);
+        resp_area_mr[i] = ibv_reg_mr(ctx->pd, (int64_t *) resp_area[i], 256 * KB, FLAGS);
+        memset((int64_t *)resp_area_mr[i], 0 , 256 * KB);
+    }
 
-//     if (!data->remote_con_info)
-//     {
-//         free(data->remote_con_info);
-//     }
-//     data->remote_con_info = malloc(sizeof(struct connection_attr));
-//     struct connection_attr *remote = data->remote_con_info;
-//     parsed = sscanf(msg, "%x:%x:%x:%x:%Lx",
-//                     &remote->lid, &remote->qpn, &remote->psn, &remote->rkey, &remote->vaddr);
-//     if (parsed != 5)
-//     {
-//         printf("Error in Parsing\n");
-//         free(data->remote_con_info);
-//         return -1;
-//     }
-//     return 1;
-// }
+    for(int i=0;i<NODE_CNT;i++){
+        req_area[i] = (int64_t *) memalign(65536, 256 * KB);
+        req_area_mr[i] = ibv_reg_mr(ctx->pd, (int64_t *) resp_area[i], 256 * KB, FLAGS);
+        memset((int64_t *)req_area_mr[i], 0 , 256 * KB);
+    }
+}
+
 /*
-*Changes Queue Pair status to RTR (Ready to receive)
+ *  Changes Queue Pair status to 1. RTR (Ready to recieve) and RTS (Ready to send)
+ *	QP status has to be RTR before changing it to RTS
 */
 static int qp_to_rtr(struct ibv_qp *qp, struct context *ctx)
 {
@@ -237,10 +240,6 @@ static int qp_to_rtr(struct ibv_qp *qp, struct context *ctx)
     return 0;
 }
 
-/*
- *  Changes Queue Pair status to RTS (Ready to send)
- *	QP status has to be RTR before changing it to RTS
-*/
 static int qp_to_rts(struct ibv_qp *qp, struct context* ctx)
 {
     qp_to_rtr(qp, ctx);
@@ -269,47 +268,47 @@ static int qp_to_rts(struct ibv_qp *qp, struct context* ctx)
     return 0;
 }
 
-
-
-static int post_recv(ibv_qp *qp, struct stag st)
+void post_recv(struct context *ctx, int num_recvs, int qpn, volatile int64_t  *local_addr, int local_key, int size)
 {
-    int ret;
-    struct ibv_sge list = {
-        .addr = (uintptr_t)st.buf,
-        .length = st.size,
-        .lkey = ctx->mr->lkey,
-    };
-    struct ibv_recv_wr wr = {
-        .next = &list,
-        .num_sge = 1,
-    };
-    struct ibv_recv_wr *bad_wr;
-    ret = ibv_post_recv(qp, &wr, &bad_wr);
-    if (ret)
-    {
-        printf("Failed to post\n");
-        return -1;
-    }
-    else
-    {
-        printf("Posted");
-    }
-    return ret;
+	int ret;
+	struct ibv_sge list = {
+		.addr	= (uintptr_t) local_addr,
+		.length = size,
+		.lkey	= local_key,
+	};
+	struct ibv_recv_wr wr = {
+		.sg_list    = &list,
+		.num_sge    = 1,
+	};
+	struct ibv_recv_wr *bad_wr;
+	int i;
+	for (i = 0; i < num_recvs; i++) {
+		ret = ibv_post_recv(ctx->qp[qpn], &wr, &bad_wr);
+		CPE(ret, "Error posting recv\n", ret);
+	}
 }
 
-static int post_send(struct context *ctx, struct ibv_qp *qp, int opcode)
-{
+void post_send(struct context *ctx, int qpn, volatile int64_t *local_addr, int local_key, int signal, int size)
+{ 
+	struct ibv_send_wr *bad_send_wr;
+	ctx->sgl.addr = (uintptr_t) local_addr;
+	ctx->sgl.lkey = local_key;	
+	ctx->wr.opcode = IBV_WR_SEND;
 
-    struct ibv_recv_wr *bad_wr;
-    ctx->sge_list.addr = (uintptr_t)ctx->buf;
-    ctx->sge_list.lkey = ctx->mr->lkey;
-    ctx->wr.opcode = IBV_WR_SEND;
-    ctx->wr.send_flags |= IBV_SEND_SIGNALED;
-    ctx->wr.sg_list = &ctx->sge_list;
-    ctx->wr.sg_list->length = ctx->size;
-    ctx->wr.num_sge = 1;
-    int ret = ibv_post_send(qp, &ctx->wr, &bad_wr);
-    return ret;
+
+	if(signal) {
+		ctx->wr.send_flags |= IBV_SEND_SIGNALED;
+	}
+
+	ctx->wr.send_flags |= IBV_SEND_INLINE;	
+ 
+	ctx->wr.sg_list = &ctx->sgl;
+	ctx->wr.sg_list->length = size;
+	ctx->wr.num_sge = 1;
+
+	int ret = ibv_post_send(ctx->qp[qpn], &ctx->wr, &bad_send_wr);
+	
+	CPE(ret, "ibv_post_send error", ret);
 }
 
 static void detroy_ctx(struct context *ctx)
@@ -317,14 +316,6 @@ static void detroy_ctx(struct context *ctx)
     if (ctx->qp)
     {
         free(ctx->qp);
-    }
-    if (ctx->mr)
-    {
-        free(ctx->mr);
-    }
-    if (ctx->buf)
-    {
-        free(ctx->buf);
     }
     if (ctx->rcq)
     {
@@ -338,6 +329,10 @@ static void detroy_ctx(struct context *ctx)
     {
         ibv_close_device(ctx->context);
     }
+    free(resp_area);
+    free(req_area);
+    free(resp_area_mr);
+    free(req_area_mr);
 }
 
 // struct application_data{
@@ -438,4 +433,38 @@ static void detroy_ctx(struct context *ctx)
 //     }
 //     qp_to_init(ctx->qp, data);
 //     return ctx;
+// }
+
+// static int tcp_exchange_qp_info(struct application_data *data)
+// {
+//     char msg[sizeof("0000:000000:000000:00000000:0000000000000000")];
+//     int parsed;
+//     int rc;
+//     struct connection_attr *local = &data->local_con_info;
+//     sprintf(msg, "%04x:%06x:%06x:%08x:%016Lx",
+//             local->lid, local->qpn, local->psn, local->rkey, local->vaddr);
+//     while (rc != sizeof(msg))
+//     {
+//         rc = nn_send(data->sockfd, msg, sizeof(msg), NN_DONTWAIT);
+//     }
+//     if (rc != sizeof(msg))
+//     {
+//         rc = nn_recv(data->sockfd, msg, sizeof(msg), NN_DONTWAIT);
+//     }
+
+//     if (!data->remote_con_info)
+//     {
+//         free(data->remote_con_info);
+//     }
+//     data->remote_con_info = malloc(sizeof(struct connection_attr));
+//     struct connection_attr *remote = data->remote_con_info;
+//     parsed = sscanf(msg, "%x:%x:%x:%x:%Lx",
+//                     &remote->lid, &remote->qpn, &remote->psn, &remote->rkey, &remote->vaddr);
+//     if (parsed != 5)
+//     {
+//         printf("Error in Parsing\n");
+//         free(data->remote_con_info);
+//         return -1;
+//     }
+//     return 1;
 // }
