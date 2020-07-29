@@ -200,12 +200,12 @@ int node(const int argc, const char **argv)
     char myurl[22], url[22];
     int to = 100, count = 0;
 
-    resp_area_stag[id].rkey = id;
+    resp_area_stag[id].rkey = resp_area_mr[id]->rkey;
     resp_area_stag[id].size = 256 * KB;
     resp_area_stag[id].id = id;
 
     req_area_stag[id].id = id;
-    req_area_stag[id].rkey = id; //req_area_mr[id]->rkey
+    req_area_stag[id].rkey = req_area_mr[id]->rkey;
     req_area_stag[id].size = 256 * KB;
 
     // char my_serialized_stag[sizeof(struct stag)+1];
