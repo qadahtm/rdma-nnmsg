@@ -33,8 +33,8 @@ int main(const int argc, const char **argv)
 	setup_buffers(ctx);
 
     if (argc >= 1)
-        // node(argc, argv);
-        return 0;
+        node(argc, argv);
+        //return 0;
     else
     {
         fprintf(stderr, "Usage: bus <node-id>...\n");

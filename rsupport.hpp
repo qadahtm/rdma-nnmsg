@@ -24,10 +24,10 @@ using namespace std;
     }
 
 //These are the memory regions
-volatile int64_t *req_area, *resp_area, *local_read;
+volatile int64_t **req_area, **resp_area, **local_read;
 
 //Registered memory
-struct ibv_mr *req_area_mr, *resp_area_mr, *local_read_mr;
+struct ibv_mr **req_area_mr, **resp_area_mr, **local_read_mr;
 
 
 //Following are the functions to support RDMA operations:
@@ -244,14 +244,21 @@ int setup_buffers(struct context* ctx){
     int FLAGS = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | 
 				IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
     
-    resp_area = (int64_t *) memalign(4096, 64 * KB * sizeof(int64_t));
-    resp_area_mr = ibv_reg_mr(ctx->pd, (int64_t *) resp_area, 64 * KB * sizeof(int64_t), FLAGS);
-    //memset((int64_t *)resp_area_mr, 0 , 64 * KB * sizeof(int64_t));
+    resp_area = (volatile int64_t **) malloc(NODE_CNT*sizeof(int64_t *));
+    resp_area_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
+    for(int i = 0; i <NODE_CNT;i++){
+        resp_area[i] = (int64_t *) memalign(4096, 64 * KB * sizeof(int64_t));
+        resp_area_mr[i] = ibv_reg_mr(ctx->pd, (int64_t *) resp_area[i], 64 * KB * sizeof(int64_t), FLAGS);
+        memset((int64_t *) resp_area[i], 0 , 64 * KB * sizeof(int64_t));
+    }
     cout << "resp_area_mr set" << endl;
-
-    req_area = (int64_t *) memalign(4096, 64 * KB * sizeof(int64_t));
-    req_area_mr = ibv_reg_mr(ctx->pd, (int64_t *) resp_area, 64 * KB * sizeof(int64_t), FLAGS);
-    //memset((int64_t *)req_area_mr, 0 , 64 * KB * sizeof(int64_t));
+    req_area = (volatile int64_t **) malloc(NODE_CNT*sizeof(int64_t *));
+    req_area_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
+    for(int i = 0; i <NODE_CNT; i++){
+        req_area[i] = (int64_t *)memalign(4096, 64 * KB * sizeof(int64_t));
+        req_area_mr[i] = ibv_reg_mr(ctx->pd, (int64_t *) resp_area[i], 64 * KB * sizeof(int64_t), FLAGS);
+        memset((int64_t *)req_area[i], 0 , 64 * KB * sizeof(int64_t));
+    }
     cout << "req_area_mr set" << endl;
 }
 
