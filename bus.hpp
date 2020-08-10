@@ -9,20 +9,29 @@
 #include <string.h>
 #include <unistd.h>
 #include "rsupport.hpp"
+#include "nn.hpp"
 #include <fstream>
 #include <thread>
 #include <bits/stl_map.h>
 
 using namespace std;
-#define sz_n sizeof(stag)
+using namespace nn;
+#define sz_n sizeof(struct stag)
+#define S_QPA sizeof(struct qp_attr)
 
 char **ifaddr;
 std::map<int, int> send_sockets, recv_sockets;
 std::map<int, stag> req_stags, resp_stags;
 
+void print_qp_attr(struct qp_attr dest)
+{
+	fflush(stdout);
+	printf("\t%d %d %d\n", dest.lid, dest.qpn, dest.psn);
+}
+
 uint64_t get_port_id(uint64_t src_node_id, uint64_t dest_node_id)
 {
-    uint64_t port_id = 17000;
+    uint64_t port_id = 20000;
     port_id += NODE_CNT * dest_node_id;
     port_id += src_node_id;
     return port_id;
@@ -46,119 +55,171 @@ void read_ifconfig(const char *ifaddr_file)
     assert(cnt == NODE_CNT);
 }
 
-void recv_thread(int id)
+void recv_thread(int id, struct context *ctx)
 {
-    cout << "In recv" << endl;
+    // cout << "In recv" << endl;
     int count = 0, i = 0;
     set<int> counter;
-    while (count <= 4)
+    while (count <= NODE_CNT - 1)
     {
         if (i == id || counter.count(i) > 0)
         {
             i++;
             continue;
         }
-        if (i > 4)
+        if (i > NODE_CNT - 1)
         {
             i = 0;
             continue;
         }
-        int recv = nn_recv(recv_sockets[i], &resp_area_stag[i], sz_n + 1, 0);
-        if (recv > 1)
+        int sock = recv_sockets.find(i)->second;
+        int r = nn_recv(sock, &resp_area_stag[i], sizeof(struct stag), 1);
+        if (r > 1)
         {
             count++;
             counter.insert(i);
-            cout << "Recieved from " << i << endl;
+            // cout << "Recieved from " << i << endl;
         }
         i++;
-        if (counter.size() == 4)
+        if (counter.size() == NODE_CNT - 1)
         {
             break;
         }
     }
-    cout << "Rec: res_area_stags" << endl;
+    // cout << "Rec: res_area_stags" << endl;
     count = 0;
     i = 0;
     counter.clear();
-    while (count <= 4)
+    while (count <= NODE_CNT - 1)
     {
         if (i == id || counter.count(i) > 0)
         {
             i++;
             continue;
         }
-        if (i > 4)
+        if (i > NODE_CNT - 1)
         {
             i = 0;
             continue;
         }
-        int recv = nn_recv(recv_sockets[i], &req_area_stag[i], sz_n + 1, 0);
-        if (recv > 1)
+        int sock = recv_sockets.find(i)->second;
+        int r = nn_recv(sock, &req_area_stag[i], sizeof(struct stag) + 1, 1);
+        if (r > 1)
         {
             count++;
             counter.insert(i);
-            cout << "Recieved from " << i << endl;
+            // cout << "Recieved from " << i << endl;
         }
         i++;
-        if (counter.size() == 4)
+        if (counter.size() == NODE_CNT - 1)
         {
             break;
         }
     }
-    cout << "Rec: req_area_stags" << endl;
-    while (count <= 4)
+    // cout << "Rec: req_area_stags" << endl;
+    count = 0;
+    i = 0;
+    counter.clear();
+    while (count <= NODE_CNT - 1)
     {
         if (i == id || counter.count(i) > 0)
         {
             i++;
             continue;
         }
-        if (i > 4)
+        if (i > NODE_CNT - 1)
         {
             i = 0;
             continue;
         }
-        int recv = nn_recv(recv_sockets[i], &req_area_stag[i], sz_n + 1, 0);
-        if (recv > 1)
-        {
-            count++;
+        int sock = recv_sockets.find(i)->second;
+        if(nn_recv(sock, &ctx->remote_qp_attrs[i], S_QPA, 0) > 1) {
             counter.insert(i);
-            cout << "Recieved from " << i << endl;
-        }
+            count++;
+		}
+        else{
+		    fprintf(stderr, "ERROR reading qp attrs from socket");
+        }        
+		printf("Server %d <-- Node %d's qp_attr: ", ctx->id, i);
+		print_qp_attr(ctx->remote_qp_attrs[i]);
+		
+		// if(connect_ctx(ctx, ctx->local_qp_attrs[i].psn, 
+		// 	ctx->remote_qp_attrs[i], ctx->qp[i], 1)) {  // Unreliable Connection
+		// 	fprintf(stderr, "Couldn't connect to remote QP\n");
+		// 	exit(0);
+		// }
         i++;
-        if (counter.size() == 4)
+        if (counter.size() == NODE_CNT - 1)
         {
             break;
         }
     }
+    // cout << "Recvd QPs" << endl;
 }
 
-void send_thread(int id)
+void send_thread(int id, struct context *ctx)
 {
-    cout << "In Send" << endl;
+    // cout << "In Send" << endl;
     int i = 0, count = 0;
     set<int> counter;
-    while (count <= 4)
+    while (count <= NODE_CNT - 1)
     {
         if (i == id || counter.count(i) > 0)
         {
             i++;
             continue;
         }
-        if (i > 4)
+        if (i > NODE_CNT - 1)
         {
             i = 0;
             continue;
         }
-        int send = nn_send(send_sockets[i], &resp_area_stag[id], sz_n + 1, 0);
-        if (send > 0)
+        int sock = send_sockets.find(i)->second;
+        int s = nn_send(sock, &resp_area_stag[id], sizeof(struct stag) + 1, 1);
+        /*if(send < 0)
         {
-            cout << "Sent to " << i << endl;
+			fprintf(stderr, "send failed: %s\n", strerror(errno));
+        }
+        else*/
+        if (s > 0)
+        {
+            // cout << "Sent to " << i << endl;
+            counter.insert(i);
+            count++;
+        }
+        
+        i++;
+        if (counter.size() == NODE_CNT - 1)
+        {
+            break;
+        }
+    }
+    // cout << "Resp area sent" << endl;
+    count = 0;
+    i = 0;
+    counter.clear();
+    while (count <= NODE_CNT - 1)
+    {
+        if (i == id || counter.count(i) > 0)
+        {
+            i++;
+            continue;
+        }
+        if (i > NODE_CNT - 1)
+        {
+            i = 0;
+            continue;
+        }
+        int sock = send_sockets.find(i)->second;
+        int s = nn_send(sock, &req_area_stag[id], sizeof(struct stag) + 1, 1);
+        if (s > 1)
+        {
+            // cout << "Sent to" << i << endl;
             counter.insert(i);
             count++;
         }
         i++;
-        if (counter.size() == 4)
+        if (counter.size() == NODE_CNT - 1)
         {
             break;
         }
@@ -166,46 +227,47 @@ void send_thread(int id)
     count = 0;
     i = 0;
     counter.clear();
-    while (count <= 4)
+    while (count <= NODE_CNT - 1)
     {
         if (i == id || counter.count(i) > 0)
         {
             i++;
             continue;
         }
-        if (i > 4)
+        if (i > NODE_CNT - 1)
         {
             i = 0;
             continue;
         }
-        int send = nn_send(send_sockets[i], &req_area_stag[id], sz_n + 1, 0);
-        if (send > 1)
+        int sock = send_sockets.find(i)->second;
+        int s = nn_send(sock, &ctx->local_qp_attrs[i], S_QPA, 1);
+        if (s > 1)
         {
-            cout << "Sent to" << i << endl;
             counter.insert(i);
             count++;
         }
         i++;
-        if (counter.size() == 4)
+        if (counter.size() == NODE_CNT - 1)
         {
             break;
         }
     }
-    cout << "Done Send" << endl;
+    // cout << "QPs Sent" << endl;
+    // cout << "Done Send" << endl;
 }
 
-int node(const int argc, const char **argv)
+int node(const int argc, const char **argv, struct context *ctx)
 {
     int id = atoi(argv[1]), i;
-    char myurl[22], url[22];
+    char myurl[30], url[30];
     int to = 100, count = 0;
 
-    resp_area_stag[id].rkey = resp_area_mr[id]->rkey;
+    resp_area_stag[id].rkey = resp_area_mr->rkey;
     resp_area_stag[id].size = 256 * KB;
-    resp_area_stag[id].id = id;
+    resp_area_stag[id].id = ctx->id;
 
-    req_area_stag[id].id = id;
-    req_area_stag[id].rkey = req_area_mr[id]->rkey;
+    req_area_stag[id].id = ctx->id;
+    req_area_stag[id].rkey = req_area_mr->rkey;
     req_area_stag[id].size = 256 * KB;
 
     // char my_serialized_stag[sizeof(struct stag)+1];
@@ -217,9 +279,9 @@ int node(const int argc, const char **argv)
             continue;
         int temp_sock = nn_socket(AF_SP, NN_PAIR);
         uint64_t p = get_port_id(id, i);
-        snprintf(url, 22, "tcp://%s:%ld", ifaddr[i], p);
-        nn_bind(temp_sock, url);
-        cout << "Connected to :" << url << endl;
+        snprintf(url, 30, "tcp://%s:%ld", ifaddr[i], p);
+        nn_connect(temp_sock, url);
+        // cout << "Connected to :" << url << endl;
         assert(nn_setsockopt(temp_sock, NN_SOL_SOCKET, NN_SNDTIMEO, &to, sizeof(to)) >= 0);
         assert(nn_setsockopt(temp_sock, NN_SOL_SOCKET, NN_RCVTIMEO, &to, sizeof(to)) >= 0);
         send_sockets.insert(make_pair(i, temp_sock));
@@ -232,20 +294,21 @@ int node(const int argc, const char **argv)
             continue;
         int temp_sock = nn_socket(AF_SP, NN_PAIR);
         uint64_t p = get_port_id(i, id);
-        snprintf(myurl, 22, "tcp://%s:%ld", ifaddr[id], p);
-        cout << "Binded to :" << myurl << endl;
-        nn_connect(temp_sock, myurl);
+        snprintf(myurl, 30, "tcp://%s:%ld", ifaddr[id], p);
+        int rc = nn_bind(temp_sock, myurl);
+        cout << rc << endl;
+        // cout << "Binded to :" << myurl << endl;
         assert(nn_setsockopt(temp_sock, NN_SOL_SOCKET, NN_RCVTIMEO, &to, sizeof(to)) >= 0);
         assert(nn_setsockopt(temp_sock, NN_SOL_SOCKET, NN_SNDTIMEO, &to, sizeof(to)) >= 0);
         recv_sockets.insert(make_pair(i, temp_sock));
         // cout << recv_sockets.size() <<endl;
     }
-    thread one(send_thread, id);
-    thread two(recv_thread, id);
+    thread one(send_thread, id, ctx);
+    thread two(recv_thread, id, ctx);
 
     one.join();
     two.join();
-    cout << "resp_area" << endl;
+    cout << "resp_area stags:" << endl;
 
     for (int i = 0; i < NODE_CNT; i++)
     {
@@ -253,7 +316,7 @@ int node(const int argc, const char **argv)
             continue;
         print_stag(resp_area_stag[i]);
     }
-    cout << "req_area" << endl;
+    cout << "req_area stags:" << endl;
     for (int i = 0; i < NODE_CNT; i++)
     {
         if (i == id)
