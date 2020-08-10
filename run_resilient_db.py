@@ -50,7 +50,7 @@ def create_bash_scripts(cpu, replica):
         lines.append("sleep 5"+"\n")
         #lines.append("sbcast -f config.h config.h"+"\n")
         lines.append("srun --nodelist=cpu-" + str(cpu[r]) + " sleep 10" + "\n")
-        lines.append("srun --exclusive --ntasks=1 --cpus-per-task=16 --nodelist=cpu-" + str(cpu[r]) + " singularity exec resilient ./trans " + str(r)+"\n")
+        lines.append("srun --exclusive --ntasks=1 --cpus-per-task=16 --nodelist=cpu-" + str(cpu[r]) + " singularity exec ../resilient ./bin/trans " + str(r)+"\n")
         PATH = './s' + str(r) + '.sh'
         f = open(PATH,'w')
         f.writelines(lines)
@@ -82,4 +82,5 @@ if(len(sys.argv) == 2):
     print("Warning: rundb & runcl must be complied with correct values in config.h")
     __main__(cpu,int(sys.argv[1]))
 else:
+    print("argv={}".format(sys.argv))
     print("Command line arguments absent or invalid, please retry. \n Format: python run_resilient_db <replica> <client>")
