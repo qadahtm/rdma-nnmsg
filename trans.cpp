@@ -1,16 +1,13 @@
 #include "bus.hpp"
-#include <string>
 
 void rdma_send_thread(struct context *ctx, int total){
-	int y = ctx->local_qp_attrs->qpn;
-	char x[30];
-	snprintf(x, 30, "Hi from %d", y);
-	memcpy(req_area, &x, sizeof(x));
+	*req_area = 121;
 	int co = 0;
 	while(co < total){
 		for(int i = 0; i < NODE_CNT ;i++){
-			if(i == ctx->id)
+			if(i == ctx->id){
 				continue;
+			}
 			int dest = i;
 			rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,64);
 		}
@@ -19,14 +16,16 @@ void rdma_send_thread(struct context *ctx, int total){
 }
 
 void rdma_recv_thread(struct context *ctx, int total){
-	int co = 0;
+	int co = 0, rc = 0;
 	while(co < total){
+		int i = 0;
 		for(int i = 0; i < NODE_CNT; i++){
-			if(i == ctx->id)
+			if(i == ctx->id){
 				continue;
+			}
 			int src = i;
-			rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,64);
-			cout << "RDMA Recieved Data:" << resp_area << endl;
+		 	rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,64);
+			cout << "RDMA Recieved Data:" << *resp_area << endl;
 		}
 		co++;
 	}
@@ -52,6 +51,7 @@ int main(const int argc, const char **argv)
 	struct ibv_device **dev_list;
 	struct ibv_device *ib_dev;
 	struct context *ctx;
+	char *buf = "Message";
 
 	srand48(getpid() * time(NULL));		//Required for PSN
 	ctx = (context *) malloc(sizeof(struct context));
@@ -80,9 +80,6 @@ int main(const int argc, const char **argv)
 	union ibv_gid my_gid = get_gid(ctx->context);
 
 	for(i = 0; i < ctx->num_conns; i++) {
-		if(i == ctx->id){
-			continue;
-		}
 		ctx->local_qp_attrs[i].id = my_gid.global.interface_id;
 		ctx->local_qp_attrs[i].lid = get_local_lid(ctx->context);
 		ctx->local_qp_attrs[i].qpn = ctx->qp[i]->qp_num;
@@ -107,14 +104,17 @@ int main(const int argc, const char **argv)
 		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 1);
 	}
 	//qp_to_rtr(ctx->qp[i], ctx);
-
+	if(ctx->id == 1){
+		post_recv(ctx, 1, 0, resp_area, resp_area_mr->lkey, 256 * KB);
+	}
 	cout << "QPs Connected" << endl;
-	// singleThreadTest(ctx);
-
-	thread rsend(rdma_send_thread, ctx, 1);
-    thread rrecv(rdma_recv_thread, ctx, 1);
 	
-    rsend.join();
-    rrecv.join();
+	singleThreadTest(ctx);
+
+    // thread rrecv(rdma_recv_thread, ctx, 10);
+	// thread rsend(rdma_send_thread, ctx, 10);
+
+    // rsend.join();
+    // rrecv.join();
 
 }

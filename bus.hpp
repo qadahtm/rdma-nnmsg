@@ -323,4 +323,11 @@ int node(const int argc, const char **argv, struct context *ctx)
             continue;
         print_stag(req_area_stag[i]);
     }
+    for (int i = 0; i < NODE_CNT ; i++){
+        if (i == id){
+            continue;
+        }
+        nn_shutdown(recv_sockets[i], 0);
+        nn_shutdown(send_sockets[i], 0);
+    }
 }

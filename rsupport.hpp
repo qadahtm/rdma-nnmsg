@@ -10,7 +10,7 @@
 
 using namespace std;
 
-#define NODE_CNT 5
+#define NODE_CNT 2
 #define TX_DEPTH 2048
 #define PRIMARY_IB_PORT 1
 #define KB 1024
@@ -24,7 +24,7 @@ using namespace std;
     }
 
 //These are the memory regions
-char *req_area, *resp_area, *local_read;
+volatile int64_t *req_area, *resp_area, *local_read;
 
 //Registered memory
 struct ibv_mr *req_area_mr, *resp_area_mr, *local_read_mr;
@@ -237,7 +237,8 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
     int completions = 0, i = 0;
     clock_gettime(CLOCK_REALTIME, &start);
     while (completions < num_completions)
-    {
+    {   
+        // cout << "DEBUG: " << "Completions: " << completions << endl;
         int new_comps = ibv_poll_cq(cq, num_completions - completions, wc);
         if (new_comps != 0)
         {
@@ -249,30 +250,31 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
                     perror("poll_recv_cq error");
                     exit(0);
                 }
+                cout << "Completed work request: " << wc[i].wr_id << endl;
             }
         }
-        clock_gettime(CLOCK_REALTIME, &end);
-        double seconds = (end.tv_sec - start.tv_sec) +
-                         (double)(end.tv_nsec - start.tv_nsec) / 1000000000;
-        if (seconds > 1)
-        {
-            // printf("Polling Completed \n");
-            // fflush(stdout);
-            break;
-        }
+        // clock_gettime(CLOCK_REALTIME, &end);
+        // double seconds = (end.tv_sec - start.tv_sec) +
+        //                  (double)(end.tv_nsec - start.tv_nsec) / 1000000000;
+        // if (seconds > 0.5)
+        // {
+        //     // printf("Polling Completed \n");
+        //     // fflush(stdout);
+        //     break;
+        // }
     }
 }
 
 int setup_buffers(struct context* ctx){
     int FLAGS = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | 
 			IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
-    resp_area = (char *) memalign(4096, 64 * KB * sizeof(char));
-    resp_area_mr = ibv_reg_mr(ctx->pd, (char *) resp_area, 64 * KB * sizeof(char), FLAGS);
-    memset((char *) resp_area, 0 , 64 * KB * sizeof(char));
+    resp_area = (int64_t *) memalign(4096, 64 * KB * sizeof(int64_t));
+    resp_area_mr = ibv_reg_mr(ctx->pd, (int64_t *) resp_area, 64 * KB * sizeof(int64_t), FLAGS);
+    memset((int64_t *) resp_area, 0 , 64 * KB * sizeof(int64_t));
 
-    req_area = (char *)memalign(4096, 64 * KB * sizeof(char));
-    req_area_mr = ibv_reg_mr(ctx->pd, (char *) req_area, 64 * KB * sizeof(char), FLAGS);
-    memset((char *)req_area, 0 , 64 * KB * sizeof(char));
+    req_area = (int64_t *)memalign(4096, 64 * KB * sizeof(int64_t));
+    req_area_mr = ibv_reg_mr(ctx->pd, (int64_t *) req_area, 64 * KB * sizeof(int64_t), FLAGS);
+    memset((int64_t *)req_area, 0 , 64 * KB * sizeof(int64_t));
 }
 
 /*For Multiple Memory Registration
@@ -370,7 +372,7 @@ static int qp_to_rts(struct ibv_qp *qp, struct context* ctx)
     return 0;
 }
 
-void post_recv(struct context *ctx, int num_recvs, int qpn, char *local_addr, int local_key, int size)
+void post_recv(struct context *ctx, int num_recvs, int qpn, volatile int64_t  *local_addr, int local_key, int size)
 {
 	int ret;
 	struct ibv_sge list;
@@ -387,7 +389,7 @@ void post_recv(struct context *ctx, int num_recvs, int qpn, char *local_addr, in
 	CPE(ret, "Error posting recv\n", ret);
 }
 
-void post_send(struct context *ctx, int qpn, char *local_addr, int local_key, int signal, int size)
+void post_send(struct context *ctx, int qpn, volatile int64_t *local_addr, int local_key, int signal, int size)
 { 
 	struct ibv_send_wr *bad_send_wr;
 	ctx->sgl.addr = (uintptr_t) local_addr;
@@ -404,6 +406,7 @@ void post_send(struct context *ctx, int qpn, char *local_addr, int local_key, in
 	ctx->wr.sg_list = &ctx->sgl;
 	ctx->wr.sg_list->length = size;
 	ctx->wr.num_sge = 1;
+    ctx->wr.wr_id = 1;
 
 	int ret = ibv_post_send(ctx->qp[qpn], &ctx->wr, &bad_send_wr);
 	
@@ -439,16 +442,17 @@ void print_stag(struct stag st)
 	printf("Stag: \t id: %u, buf: %lu, rkey: %u, size: %u\n", st.id ,st.buf, st.rkey, st.size); 
 }
 
-int rdma_send(struct context *ctx, int qpn, char *local_addr, int local_key, int signal, int size){
+int rdma_send(struct context *ctx, int qpn, volatile int64_t *local_addr, int local_key, int signal, int size){
     post_send(ctx, qpn, local_addr, local_key,signal,size);
 	poll_cq(ctx->scq[qpn], 1);
+    cout << "Send queue polled" << endl;
     return size;
 }
 
-void rdma_recv(struct context *ctx, int num_recvs, int qpn, char  *local_addr, int local_key, int size){
+int rdma_recv(struct context *ctx, int num_recvs, int qpn, volatile int64_t  *local_addr, int local_key, int size){
     post_recv(ctx, num_recvs, qpn, local_addr, local_key,size);
-    cout << "Recv posted" << endl;
-    poll_cq(ctx->rcq[qpn], 1);
+    poll_cq(ctx->rcq[qpn], num_recvs);
+    cout << "Recieve queue polled" << endl;
 }
 
 // struct application_data{
