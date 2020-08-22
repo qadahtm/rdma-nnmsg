@@ -33,14 +33,21 @@ void rdma_recv_thread(struct context *ctx, int total){
 
 void singleThreadTest(struct context *ctx){
 	if(ctx->id == 0){
-		*req_area = 121;
-		int dest = 1;
-		rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,64);
+		// *req_area = (uintptr_t) resp_area;
+		int dest = 1, count = 0;
+		// rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,sizeof(int64_t));
+		// cout << "sent" << *req_area << endl;
+		post_read(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 1, sizeof(int64_t));
+		poll_cq(ctx->cq[dest], 1);
+		cout << "Read: " << *req_area << endl;
 	}
 	else{
 		int src = 0;
-		rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,64);
-		cout << "RDMA Recieved Data:" << *resp_area << endl;
+		*resp_area = 12345;
+		poll_cq(ctx->cq[src], 1);
+		cout << "Polled" << endl;
+		// rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,sizeof(int64_t));
+		cout << "I have: " << *resp_area << endl;
 	}
 }
 
@@ -51,7 +58,7 @@ int main(const int argc, const char **argv)
 	struct ibv_device **dev_list;
 	struct ibv_device *ib_dev;
 	struct context *ctx;
-	char *buf = "Message";
+	// char *buf = "Message";
 
 	srand48(getpid() * time(NULL));		//Required for PSN
 	ctx = (context *) malloc(sizeof(struct context));
@@ -101,11 +108,11 @@ int main(const int argc, const char **argv)
 		if(i == ctx->id){
 			continue;
 		}
-		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 1);
+		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 0);
 	}
 	//qp_to_rtr(ctx->qp[i], ctx);
 	if(ctx->id == 1){
-		post_recv(ctx, 1, 0, resp_area, resp_area_mr->lkey, 256 * KB);
+		post_recv(ctx, 1, 0, resp_area, resp_area_mr->lkey, sizeof(int64_t));
 	}
 	cout << "QPs Connected" << endl;
 	

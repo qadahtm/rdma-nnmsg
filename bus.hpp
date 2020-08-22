@@ -265,10 +265,13 @@ int node(const int argc, const char **argv, struct context *ctx)
     resp_area_stag[id].rkey = resp_area_mr->rkey;
     resp_area_stag[id].size = 256 * KB;
     resp_area_stag[id].id = ctx->id;
+    resp_area_stag[id].buf = (uintptr_t) resp_area;
 
     req_area_stag[id].id = ctx->id;
     req_area_stag[id].rkey = req_area_mr->rkey;
     req_area_stag[id].size = 256 * KB;
+    req_area_stag[id].buf = (uintptr_t) req_area;
+
 
     // char my_serialized_stag[sizeof(struct stag)+1];
     // serialize(node_stags[id], my_serialized_stag);
