@@ -9,7 +9,7 @@ void rdma_send_thread(struct context *ctx, int total){
 				continue;
 			}
 			int dest = i;
-			rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,64);
+			rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,MSG_SIZE);
 		}
 		co++;
 	}
@@ -24,7 +24,7 @@ void rdma_recv_thread(struct context *ctx, int total){
 				continue;
 			}
 			int src = i;
-		 	rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,64);
+		 	rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,MSG_SIZE);
 			cout << "RDMA Recieved Data:" << *resp_area << endl;
 		}
 		co++;
@@ -34,20 +34,24 @@ void rdma_recv_thread(struct context *ctx, int total){
 void singleThreadTest(struct context *ctx){
 	if(ctx->id == 0){
 		// *req_area = (uintptr_t) resp_area;
+		sprintf((char *)req_area, "Hello from the other side: %d \n", 123);
 		int dest = 1, count = 0;
 		// rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,sizeof(int64_t));
+		// post_read(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 0, MSG_SIZE);
 		// cout << "sent" << *req_area << endl;
-		post_read(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 1, sizeof(int64_t));
+		post_write(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 1, MSG_SIZE);
 		poll_cq(ctx->cq[dest], 1);
-		cout << "Read: " << *req_area << endl;
+		cout << "write: " << req_area << endl;
 	}
-	else{
+	else {
 		int src = 0;
-		*resp_area = 12345;
-		poll_cq(ctx->cq[src], 1);
-		cout << "Polled" << endl;
+		// poll_cq(ctx->cq[src], 1);
+		// sprintf((char *)resp_area, "Hello from the other side: %d \n", 123);
+		// poll_cq(ctx->cq[src], 1);
+		// cout << "Polled" << endl;
 		// rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,sizeof(int64_t));
-		cout << "I have: " << *resp_area << endl;
+		sleep(10);
+		cout << "I have: " << resp_area << endl;
 	}
 }
 
@@ -105,15 +109,12 @@ int main(const int argc, const char **argv)
     }
 	cout << "Exchange done!" << endl;
 	for(int i = 0;i < NODE_CNT; i++){
-		if(i == ctx->id){
-			continue;
-		}
 		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 0);
 	}
 	//qp_to_rtr(ctx->qp[i], ctx);
-	if(ctx->id == 1){
-		post_recv(ctx, 1, 0, resp_area, resp_area_mr->lkey, sizeof(int64_t));
-	}
+	// if(ctx->id == 1){
+	// 	post_recv(ctx, 1, 0, resp_area, resp_area_mr->lkey, MSG_SIZE);
+	// }
 	cout << "QPs Connected" << endl;
 	
 	singleThreadTest(ctx);
