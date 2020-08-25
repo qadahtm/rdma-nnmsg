@@ -10,7 +10,7 @@ nanomsg, ibverbs libraries installed
 
 # Compilation and Execution:
 
-g++ trans.cpp -o trans -pthread -lnanomsg -libverbs
+g++ trans.cpp -o trans -pthread -lnanomsg -libverbs && 
 ./trans <NODE_ID>
 
 # Features
