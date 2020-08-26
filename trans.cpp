@@ -1,47 +1,72 @@
 #include "bus.hpp"
-#include <string>
 
 void rdma_send_thread(struct context *ctx, int total){
-	int y = ctx->local_qp_attrs->qpn;
-	char x[30];
-	snprintf(x, 30, "Hi from %d", y);
-	memcpy(req_area, &x, sizeof(x));
+	*req_area = 121;
 	int co = 0;
 	while(co < total){
 		for(int i = 0; i < NODE_CNT ;i++){
-			if(i == ctx->id)
+			if(i == ctx->id){
 				continue;
+			}
 			int dest = i;
-			rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,64);
+			rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,MSG_SIZE);
 		}
 		co++;
 	}
 }
 
 void rdma_recv_thread(struct context *ctx, int total){
-	int co = 0;
+	int co = 0, rc = 0;
 	while(co < total){
+		int i = 0;
 		for(int i = 0; i < NODE_CNT; i++){
-			if(i == ctx->id)
+			if(i == ctx->id){
 				continue;
+			}
 			int src = i;
-			rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,64);
-			cout << "RDMA Recieved Data:" << resp_area << endl;
+		 	rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,MSG_SIZE);
+			cout << "RDMA Recieved Data:" << *resp_area << endl;
 		}
 		co++;
 	}
 }
 
+
+// bool isMessageAvailable(char *buf){
+// 	while(true){
+// 		if(buf != " "){
+// 			break;
+// 		}
+// 	}
+// 	return true;
+// }
+
 void singleThreadTest(struct context *ctx){
 	if(ctx->id == 0){
-		*req_area = 121;
 		int dest = 1;
-		rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,64);
+		// *req_area = (uintptr_t) resp_area;
+		// sprintf((char *)req_area, "Hello from the other side, I am node: %d \n", ctx->id);
+		// int dest = 1, count = 0;
+		// rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,sizeof(int64_t));
+		rdma_remote_read(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 1, MSG_SIZE);
+		cout << "Read: " << req_area << endl;
+		
+		// Remote Write:
+		// post_write(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 1, MSG_SIZE);
+		// poll_cq(ctx->cq[dest], 1);
+		// cout << "Written: " << req_area << endl;
 	}
-	else{
+	else {
 		int src = 0;
-		rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,64);
-		cout << "RDMA Recieved Data:" << *resp_area << endl;
+		//Local Write for Remote Read:
+		sprintf((char *)resp_area, "Hello from the other side, I am node: %d \n", ctx->id);
+		sleep(10);
+		//Local Read after Write:
+		// while ((resp_area != NULL) && (resp_area[0] == '\0')) {
+   		// 	continue;
+		// }
+		// cout << "Other node wrote:" << resp_area <<" With size: " << sizeof(resp_area)<< endl;
+		
 	}
 }
 
@@ -52,6 +77,7 @@ int main(const int argc, const char **argv)
 	struct ibv_device **dev_list;
 	struct ibv_device *ib_dev;
 	struct context *ctx;
+	// char *buf = "Message";
 
 	srand48(getpid() * time(NULL));		//Required for PSN
 	ctx = (context *) malloc(sizeof(struct context));
@@ -80,9 +106,6 @@ int main(const int argc, const char **argv)
 	union ibv_gid my_gid = get_gid(ctx->context);
 
 	for(i = 0; i < ctx->num_conns; i++) {
-		if(i == ctx->id){
-			continue;
-		}
 		ctx->local_qp_attrs[i].id = my_gid.global.interface_id;
 		ctx->local_qp_attrs[i].lid = get_local_lid(ctx->context);
 		ctx->local_qp_attrs[i].qpn = ctx->qp[i]->qp_num;
@@ -101,20 +124,20 @@ int main(const int argc, const char **argv)
     }
 	cout << "Exchange done!" << endl;
 	for(int i = 0;i < NODE_CNT; i++){
-		if(i == ctx->id){
-			continue;
-		}
-		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 1);
+		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 0);
 	}
 	//qp_to_rtr(ctx->qp[i], ctx);
-
+	// if(ctx->id == 1){
+	// 	post_recv(ctx, 1, 0, resp_area, resp_area_mr->lkey, MSG_SIZE);
+	// }
 	cout << "QPs Connected" << endl;
-	// singleThreadTest(ctx);
-
-	thread rsend(rdma_send_thread, ctx, 1);
-    thread rrecv(rdma_recv_thread, ctx, 1);
 	
-    rsend.join();
-    rrecv.join();
+	singleThreadTest(ctx);
+
+    // thread rrecv(rdma_recv_thread, ctx, 10);
+	// thread rsend(rdma_send_thread, ctx, 10);
+
+    // rsend.join();
+    // rrecv.join();
 
 }

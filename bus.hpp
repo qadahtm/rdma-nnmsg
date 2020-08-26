@@ -26,7 +26,7 @@ std::map<int, stag> req_stags, resp_stags;
 void print_qp_attr(struct qp_attr dest)
 {
 	fflush(stdout);
-	printf("\t%d %d %d\n", dest.lid, dest.qpn, dest.psn);
+	printf("\t LID: %d QPN: %d PSN: %d\n", dest.lid, dest.qpn, dest.psn);
 }
 
 uint64_t get_port_id(uint64_t src_node_id, uint64_t dest_node_id)
@@ -263,12 +263,15 @@ int node(const int argc, const char **argv, struct context *ctx)
     int to = 100, count = 0;
 
     resp_area_stag[id].rkey = resp_area_mr->rkey;
-    resp_area_stag[id].size = 256 * KB;
+    resp_area_stag[id].size = MSG_SIZE;
     resp_area_stag[id].id = ctx->id;
+    resp_area_stag[id].buf = (uintptr_t) resp_area;
 
     req_area_stag[id].id = ctx->id;
     req_area_stag[id].rkey = req_area_mr->rkey;
-    req_area_stag[id].size = 256 * KB;
+    req_area_stag[id].size = MSG_SIZE;
+    req_area_stag[id].buf = (uintptr_t) req_area;
+
 
     // char my_serialized_stag[sizeof(struct stag)+1];
     // serialize(node_stags[id], my_serialized_stag);
@@ -296,7 +299,7 @@ int node(const int argc, const char **argv, struct context *ctx)
         uint64_t p = get_port_id(i, id);
         snprintf(myurl, 30, "tcp://%s:%ld", ifaddr[id], p);
         int rc = nn_bind(temp_sock, myurl);
-        cout << rc << endl;
+        // cout << rc << endl;
         // cout << "Binded to :" << myurl << endl;
         assert(nn_setsockopt(temp_sock, NN_SOL_SOCKET, NN_RCVTIMEO, &to, sizeof(to)) >= 0);
         assert(nn_setsockopt(temp_sock, NN_SOL_SOCKET, NN_SNDTIMEO, &to, sizeof(to)) >= 0);
@@ -322,5 +325,12 @@ int node(const int argc, const char **argv, struct context *ctx)
         if (i == id)
             continue;
         print_stag(req_area_stag[i]);
+    }
+    for (int i = 0; i < NODE_CNT ; i++){
+        if (i == id){
+            continue;
+        }
+        nn_shutdown(recv_sockets[i], 0);
+        nn_shutdown(send_sockets[i], 0);
     }
 }
