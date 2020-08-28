@@ -1,7 +1,8 @@
 #include "bus.hpp"
 #include <mutex>
 
-//Should not be used anymore
+
+//For Testing send and Recv
 void rdma_send_thread(struct context *ctx, int total){
 	*req_area = 121;
 	int co = 0;
@@ -31,7 +32,6 @@ void rdma_recv_thread(struct context *ctx, int total){
 		co++;
 	}
 }
-
 std::mutex mtx;
 
 void rdma_remote_read_thread(struct context *ctx){
@@ -169,6 +169,7 @@ int main(const int argc, const char **argv)
 	thread remote_reader(rdma_remote_read_thread, ctx);
 	thread remote_writer(rdma_remote_write_thread, ctx);
 	thread local_reader(local_read_thread, ctx);
+
 
 	remote_reader.join();
 	remote_writer.join();
