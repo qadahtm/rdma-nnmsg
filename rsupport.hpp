@@ -1,3 +1,11 @@
+/*
+Following code is used for RDMA Setup and Operations
+1. Register the memory regions req_area, resp_area with RDMA device. The mr attributes are saved in STAGs
+2. These REQ_STAGs and RESP_STAGs are exchanged between the nodes that are supposed to communicate with one another. Ref: bus.hpp
+3. To increment size of memeory allocation: increase MSG_SIZE here under
+4. The communication operations are implemented in trans.cpp
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <infiniband/verbs.h>
@@ -10,7 +18,8 @@
 
 using namespace std;
 
-#define NODE_CNT 2
+#define NODE_CNT 3
+
 #define TX_DEPTH 1
 #define PRIMARY_IB_PORT 1
 #define KB 1024
@@ -50,12 +59,13 @@ void post_send(struct context *ctx, int qpn, char *local_addr, int local_key, in
 void post_write(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
 void post_read(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
 
-
+ 
 //APIs to be used for actual operations
 void rdma_local_write(struct context *ctx, char* local_area, char* buf);
 char* rdma_local_read(struct context *ctx, char* local_area, char* buf);
-void rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey, int signal, int size);
-char* rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey, int signal, int size);
+int rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey);
+int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey);
+
 
 struct qp_attr
 {
@@ -173,7 +183,7 @@ uint16_t get_local_lid(struct ibv_context *context)
 }
 
 
-int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv_qp* qp, int use_uc)
+int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv_qp* qp, int use_uc, int i)
 {
 	struct ibv_qp_attr *conn_attr;
     conn_attr = (struct ibv_qp_attr *)malloc(sizeof(struct ibv_qp_attr));
@@ -187,7 +197,8 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 	conn_attr->ah_attr.port_num = PRIMARY_IB_PORT;
     conn_attr->min_rnr_timer = 12;
 
-    cout << "DEBUG: " << "Connecting context id: " << ctx->id << " to dest qpn: " << dest.qpn << endl;
+    // cout << "DEBUG: " << "Connecting context id: " << ctx->id << " to dest qpn: " << dest.qpn << endl;
+
 
 	int rtr_flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN
 		| IBV_QP_RQ_PSN | IBV_QP_MIN_RNR_TIMER;
@@ -199,10 +210,10 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 	} 
 	
 	if (ibv_modify_qp(qp, conn_attr, rtr_flags)) {
-		fprintf(stderr, "send failed: %s\n", strerror(errno));
+		fprintf(stderr, "ibv_modify_qp to rtr failed: %s for node %d\n", strerror(errno), i);
 		return 1;
 	}
-    cout << "IBV_MODIFY_QP: RTR" << endl;
+    // cout << "IBV_MODIFY_QP: RTR" << endl;
 	memset(conn_attr, 0, sizeof(conn_attr));
 	conn_attr->qp_state	    = IBV_QPS_RTS;
 	conn_attr->sq_psn	    = my_psn;
@@ -222,7 +233,7 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 		fprintf(stderr, "Failed to modify QP to RTS\n");
 		return 1;
 	}
-    cout << "IBV_MODIFY_QP: RTS" << endl;
+    // cout << "IBV_MODIFY_QP: RTS" << endl;
 	return 0;
 }
 
@@ -247,7 +258,8 @@ void qp_to_init(struct context* ctx)
 
 static int poll_cq(struct ibv_cq *cq, int num_completions)
 {
-    cout << "DEBUG: Polling for completions" << endl;
+
+    // cout << "DEBUG: Polling for completions" << endl;
     struct timespec end;
     struct timespec start;
     struct ibv_wc *wc = (struct ibv_wc *)malloc(
@@ -280,7 +292,8 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
         //     break;
         // }
     }
-    cout << "DEBUG: " << "Completions: " << completions << "Status: " << wc[0].imm_data << endl ;
+    // cout << "DEBUG: " << "Completions: " << completions << "Status: " << wc[0].imm_data << endl ;
+
 }
 
 int setup_buffers(struct context* ctx){
@@ -351,7 +364,7 @@ static int qp_to_rtr(struct ibv_qp *qp, struct context *ctx)
                       IBV_QP_RQ_PSN |
                       IBV_QP_MAX_DEST_RD_ATOMIC |
                       IBV_QP_MIN_RNR_TIMER) > 0){
-                            fprintf(stderr, "send failed: %s\n", strerror(errno));
+                            fprintf(stderr, "ibv_modify_qp to rtr failed: %s\n", strerror(errno));
 		                    return 1;
                       };
 
@@ -436,7 +449,9 @@ void post_write(struct context *ctx, int qpn,
 	uint64_t remote_addr, int remote_key, int signal, int size)
 {
     struct ibv_send_wr *bad_send_wr;
-    cout << "DEBUG: " << "POSTING WRITE" << endl;
+
+    // cout << "DEBUG: " << "POSTING WRITE" << endl;
+
 
 	ctx->sgl.addr = (uintptr_t) local_addr;
 	ctx->sgl.lkey = local_key;
@@ -455,7 +470,9 @@ void post_write(struct context *ctx, int qpn,
 	ctx->wr.wr.rdma.rkey = remote_key;
 
 	int ret = ibv_post_send(ctx->qp[qpn], &ctx->wr, &bad_send_wr); //  &wrbatch[0]
-    cout << "DEBUG: " << "POSTED WRITE ibv_post_send returned: " << ret << endl;
+
+    // cout << "DEBUG: " << "POSTED WRITE ibv_post_send returned: " << ret << endl;
+
     if(ret){
     	perror("WRITE ERROR: ");
     }
@@ -476,9 +493,7 @@ void post_read(struct context *ctx, int qpn,
 	ctx->wr.opcode = IBV_WR_RDMA_READ;
 //	ctx->wr.send_flags = 0; for batching it is required
 	if(signal) ctx->wr.send_flags |= IBV_SEND_SIGNALED;
-
-    ctx->wr.wr_id = 0;
-    ctx->wr.next = NULL;
+  ctx->wr.next = NULL;
 	ctx->wr.sg_list = &ctx->sgl;
 
 	ctx->wr.num_sge = 1;
@@ -536,152 +551,14 @@ int rdma_recv(struct context *ctx, int num_recvs, int qpn,  char  *local_addr, i
 void rdma_local_write(struct context *ctx, char* local_area, char* buf){
 	strcpy(local_area, buf);
 }
-void rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey, int signal, int size){
-	post_write(ctx, 1, local_area, lkey, remote_buf, rkey, signal, MSG_SIZE);
-	poll_cq(ctx->cq[dest], 1);
+int rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey){
+	post_write(ctx, dest, local_area, lkey, remote_buf, rkey, 1, MSG_SIZE);
+	return poll_cq(ctx->cq[dest], 1);
 }
 char* rdma_local_read(struct context *ctx, char* local_area){
-	while ((local_area != NULL) && (local_area[0] == '\0')) {
-   		continue;
-	}
-	return local_area;
+    return local_area;
 }
-char* rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey, int signal, int size){
-	post_read(ctx, 1, local_area, lkey, remote_buf, rkey, signal, size);
-    poll_cq(ctx->cq[dest], 1);
-	return local_area;
+int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey){
+    post_read(ctx, dest, local_area, lkey, remote_buf, rkey, 1, MSG_SIZE);
+    return poll_cq(ctx->cq[dest], 1);
 }
-
-// struct application_data{
-// 	int ib_port;
-// 	unsigned size;
-// 	int tx_depth;
-// 	int sockfd;
-// 	char *nodename;
-// 	struct connection_attr local_con_info;
-// 	struct connection_attr *remote_con_info;
-// };
-
-// static struct application_data* init_application_data(char r_u[21], int ib_port, int size, int tx_depth
-// 								,char* name
-// 								,struct connection_attr* remote_qp
-// 								,struct ibv_device *dev){
-
-//                                     struct application_data *temp;
-// 									temp = (struct temp *) malloc(sizeof *temp);
-// 									temp->ib_dev = dev;
-// 									strncpy(temp->recv_url, r_u, 21);
-// 									temp->ib_port = ib_port;
-// 									temp->size = size;
-// 									temp->tx_depth = tx_depth;
-// 									temp->nodename = name;
-// 									temp->remote_con_info = remote_qp;
-//                                     return temp;
-//                                 }
-
-// static struct context* init_ctx(struct application_data* data){
-//     struct context *ctx;
-//     struct ibv_device **dev_list;
-//     ctx = (struct context *) malloc(sizeof *ctx);
-//     memset(ctx, 0, sizeof(&ctx));
-//     ctx->size = data->size;
-//     ctx->tx_depth = data->tx_depth;
-//     posix_memalign(&ctx->buf ,sysconf(_SC_PAGESIZE), ctx->size * 2);
-//     memset(ctx->buf, 0, ctx->size * 2);
-//     dev_list = ibv_get_device_list(NULL);
-//     if(!dev_list){
-//         printf("Fatal: Device List\n");
-//         return 0;
-//     }
-// 	data->ib_dev = dev_list[0];
-//     ctx->context = ibv_open_device(data->ib_dev);
-//     if(!ctx->context){
-//         printf("Fatal: Context Error\n");
-//         return 0;
-//     }
-//     ctx->pd = ibv_alloc_pd(ctx->context);
-//     if(!ctx->pd){
-//         printf("Fatal: PD Error\n");
-//         return 0;
-//     }
-//     ctx->mr = ibv_reg_mr(ctx->pd,ctx->buf, ctx->size * 2
-//                         ,IBV_ACCESS_REMOTE_WRITE
-//                         | IBV_ACCESS_LOCAL_WRITE
-//                         | IBV_ACCESS_REMOTE_READ);
-//     if(!ctx->mr){
-//         printf("Fatal: MR\n");
-//         return 0;
-//     }
-//     ctx->ch = ibv_create_comp_channel(ctx->context);
-//     if(!ctx->ch){
-//         printf("Fatal: CH\n");
-//         return 0;
-//     }
-//     //Check Parameters
-//     ctx->rcq = ibv_create_cq(ctx->context, 1, NULL
-//                 ,NULL, 0);
-//     if(!ctx->rcq){
-//         printf("Fatal: RCQ\n");
-//         return 0;
-//     }
-//     ctx->scq = ibv_create_cq(ctx->context, ctx->tx_depth, NULL
-//                 ,NULL, 0);
-//     if(!ctx->scq){
-//         printf("Fatal: SCQ\n");
-//         return 0;
-//     }
-
-//     struct ibv_qp_init_attr qp_init_attr = {
-//         .send_cq = ctx->scq,
-//         .recv_cq = ctx->rcq,
-//         .qp_type = IBV_QPT_RC,
-//         .cap = {
-//             .max_send_wr = ctx->tx_depth,
-// 			.max_recv_wr = 1,
-// 			.max_send_sge = 1,
-// 			.max_recv_sge = 1,
-// 			.max_inline_data = 0
-//         }
-//     };
-//     ctx->qp = ibv_create_qp(ctx->pd, &qp_init_attr);
-//     if(!ctx->qp){
-//         printf("Fatal: QP\n");
-//         return 0;
-//     }
-//     qp_to_init(ctx->qp, data);
-//     return ctx;
-// }
-
-// static int tcp_exchange_qp_info(struct application_data *data)
-// {
-//     char msg[sizeof("0000:000000:000000:00000000:0000000000000000")];
-//     int parsed;
-//     int rc;
-//     struct connection_attr *local = &data->local_con_info;
-//     sprintf(msg, "%04x:%06x:%06x:%08x:%016Lx",
-//             local->lid, local->qpn, local->psn, local->rkey, local->vaddr);
-//     while (rc != sizeof(msg))
-//     {
-//         rc = nn_send(data->sockfd, msg, sizeof(msg), NN_DONTWAIT);
-//     }
-//     if (rc != sizeof(msg))
-//     {
-//         rc = nn_recv(data->sockfd, msg, sizeof(msg), NN_DONTWAIT);
-//     }
-
-//     if (!data->remote_con_info)
-//     {
-//         free(data->remote_con_info);
-//     }
-//     data->remote_con_info = malloc(sizeof(struct connection_attr));
-//     struct connection_attr *remote = data->remote_con_info;
-//     parsed = sscanf(msg, "%x:%x:%x:%x:%Lx",
-//                     &remote->lid, &remote->qpn, &remote->psn, &remote->rkey, &remote->vaddr);
-//     if (parsed != 5)
-//     {
-//         printf("Error in Parsing\n");
-//         free(data->remote_con_info);
-//         return -1;
-//     }
-//     return 1;
-// }
