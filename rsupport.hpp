@@ -19,6 +19,7 @@ Following code is used for RDMA Setup and Operations
 using namespace std;
 
 #define NODE_CNT 3
+
 #define TX_DEPTH 1
 #define PRIMARY_IB_PORT 1
 #define KB 1024
@@ -57,12 +58,14 @@ void post_recv(struct context *ctx, int num_recvs, int qpn, char  *local_addr, i
 void post_send(struct context *ctx, int qpn, char *local_addr, int local_key, int signal, int size);
 void post_write(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
 void post_read(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
+
  
 //APIs to be used for actual operations
 void rdma_local_write(struct context *ctx, char* local_area, char* buf);
 char* rdma_local_read(struct context *ctx, char* local_area, char* buf);
 int rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey);
 int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey);
+
 
 struct qp_attr
 {
@@ -185,7 +188,7 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 	struct ibv_qp_attr *conn_attr;
     conn_attr = (struct ibv_qp_attr *)malloc(sizeof(struct ibv_qp_attr));
 	conn_attr->qp_state			= IBV_QPS_RTR;
-	conn_attr->path_mtu			= IBV_MTU_4096;
+	conn_attr->path_mtu			= IBV_MTU_256;
 	conn_attr->dest_qp_num		= dest.qpn;
 	conn_attr->rq_psn			= dest.psn;
 	conn_attr->ah_attr.dlid = dest.lid;
@@ -195,6 +198,7 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
     conn_attr->min_rnr_timer = 12;
 
     // cout << "DEBUG: " << "Connecting context id: " << ctx->id << " to dest qpn: " << dest.qpn << endl;
+
 
 	int rtr_flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN
 		| IBV_QP_RQ_PSN | IBV_QP_MIN_RNR_TIMER;
@@ -254,6 +258,7 @@ void qp_to_init(struct context* ctx)
 
 static int poll_cq(struct ibv_cq *cq, int num_completions)
 {
+
     // cout << "DEBUG: Polling for completions" << endl;
     struct timespec end;
     struct timespec start;
@@ -288,6 +293,7 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
         // }
     }
     // cout << "DEBUG: " << "Completions: " << completions << "Status: " << wc[0].imm_data << endl ;
+
 }
 
 int setup_buffers(struct context* ctx){
@@ -443,7 +449,9 @@ void post_write(struct context *ctx, int qpn,
 	uint64_t remote_addr, int remote_key, int signal, int size)
 {
     struct ibv_send_wr *bad_send_wr;
+
     // cout << "DEBUG: " << "POSTING WRITE" << endl;
+
 
 	ctx->sgl.addr = (uintptr_t) local_addr;
 	ctx->sgl.lkey = local_key;
@@ -462,7 +470,9 @@ void post_write(struct context *ctx, int qpn,
 	ctx->wr.wr.rdma.rkey = remote_key;
 
 	int ret = ibv_post_send(ctx->qp[qpn], &ctx->wr, &bad_send_wr); //  &wrbatch[0]
+
     // cout << "DEBUG: " << "POSTED WRITE ibv_post_send returned: " << ret << endl;
+
     if(ret){
     	perror("WRITE ERROR: ");
     }
@@ -483,8 +493,7 @@ void post_read(struct context *ctx, int qpn,
 	ctx->wr.opcode = IBV_WR_RDMA_READ;
 //	ctx->wr.send_flags = 0; for batching it is required
 	if(signal) ctx->wr.send_flags |= IBV_SEND_SIGNALED;
-
-    ctx->wr.next = NULL;
+  ctx->wr.next = NULL;
 	ctx->wr.sg_list = &ctx->sgl;
 
 	ctx->wr.num_sge = 1;
