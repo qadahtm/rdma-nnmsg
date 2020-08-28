@@ -35,30 +35,33 @@ void rdma_recv_thread(struct context *ctx, int total){
 std::mutex mtx;
 
 void rdma_remote_read_thread(struct context *ctx){
-	int remote = 0;
-	char *buf = (char *)malloc(sz_n);
-	
-}
-
-void local_write_thread(struct context *ctx){
-	int remote = 0;
-	char *buf;
-	buf = (char *)malloc(sz_n);
-	mtx.lock();
-	snprintf(buf, sz_n, "This message is from %d", ctx->id);
-	cout << "DEBUG: Written: " << buf << "local memory" << endl;
-	strcpy(req_area, buf);
-	mtx.unlock();
-}
-
-void rdma_local_read_thread(struct context *ctx){
-	int count = 0;
-	while(count < NODE_CNT){
+	for(int i = 0; i< NODE_CNT; i++) {
+		if(i == ctx->id) continue;
 		mtx.lock();
-		char* buf = rdma_local_read(ctx, resp_area);
-		cout << buf << endl;
-		count++;
-		memset(resp_area, 0, sz_n);
+		rdma_remote_read(ctx, i, req_area, req_area_mr->lkey, req_area_stag[i].buf, req_area_stag[i].rkey);
+		cout << "REMOTE READ: Found : " << req_area << " on req_area of Node: " << i << endl;
+		mtx.unlock();
+	}
+}
+
+void rdma_remote_write_thread(struct context *ctx){
+	for(int i = 0; i< NODE_CNT; i++) {
+		if(i == ctx->id) continue;
+		mtx.lock();
+		rdma_remote_write(ctx, i, resp_area, resp_area_mr->lkey, resp_area_stag[i].buf, resp_area_stag[i].rkey);
+		cout << "REMOTE WRITE: Wrote : " << resp_area << " on resp_area of Node: " << i << endl;
+		mtx.unlock();
+	}
+}
+
+void local_read_thread(struct context *ctx){
+	for(int i = 0; i< NODE_CNT; i++) {
+		if(i == ctx->id) continue;
+		mtx.lock();
+		while ((resp_area != NULL) && (resp_area[0] == '\0')) {
+   			continue;
+		}
+		cout << "LOCAL READ: Recieved :" << resp_area << " from Node: " << i << endl;
 		mtx.unlock();
 	}
 }
@@ -66,35 +69,20 @@ void rdma_local_read_thread(struct context *ctx){
 void singleThreadTest(struct context *ctx){
 	if(ctx->id == 0){
 		int dest = 1, count = 0;
-		// char *buf = (char *)malloc(sz_n);
-		// *req_area = (uintptr_t) resp_area;
 		sprintf((char *)req_area, "Hello from the other side, I am node: %d \n", ctx->id);
-		// int dest = 1, count = 0;
-		// rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,sizeof(int64_t));
-		// Remote Write:
 		rdma_remote_write(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey);
-		// post_write(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey, 1, MSG_SIZE);
-		// poll_cq(ctx->cq[dest], 1);
 		cout << "Written: " << req_area << endl;
 		while ((resp_area != NULL) && (resp_area[0] == '\0')) {
    			continue;
 		}
 		cout << "Node 2 wrote:" << resp_area <<" With size: " << sizeof(resp_area)<< endl;
-		// post_read(ctx, 1, req_area, req_area_mr->lkey, req_area_stag[1].buf, req_area_stag[1].rkey, 1, MSG_SIZE);
-		// poll_cq(ctx->cq[dest], 1);
 		rdma_remote_read(ctx, 2, req_area, req_area_mr->lkey, req_area_stag[2].buf, req_area_stag[2].rkey);
 		cout << "On Node 2's memory, I found: " << req_area << endl;
 	}
 	if(ctx -> id == 1) {
 		int src = 0;
 		char *buf = (char *)malloc(MSG_SIZE);
-		//Local Write for Remote Read:
-		// sleep(1);
-		// cout << "Not Sleeping" << endl;
-		// sprintf((char *)resp_area, "Hello from the other side, I am node: %d \n", ctx->id);
 		cout << resp_area << endl;
-		// sleep(10);
-		// Local Read after Write:
 		while ((resp_area != NULL) && (resp_area[0] == '\0')) {
    			continue;
 		}
@@ -107,7 +95,6 @@ void singleThreadTest(struct context *ctx){
 	if(ctx->id == 2){
 		int dest = 0;
 		sprintf((char *)req_area, "Hello from the other side, I am node: %d \n", ctx->id);
-		// Remote Write:
 		rdma_remote_write(ctx, 0, req_area, req_area_mr->lkey, resp_area_stag[dest].buf, resp_area_stag[dest].rkey);
 		cout << "Written: " << req_area << endl;
 		rdma_remote_write(ctx, 1, req_area, req_area_mr->lkey, resp_area_stag[1].buf, resp_area_stag[1].rkey);
@@ -144,7 +131,7 @@ int main(const int argc, const char **argv)
 	init_ctx(ctx, ib_dev);
 	CPE(!ctx, "Init ctx failed", 0);
 
-    cout << "Context Initialized" << endl;
+    // cout << "Context Initialized" << endl;
 
 	setup_buffers(ctx);
 	//set the memory buffers to some default value
@@ -156,8 +143,8 @@ int main(const int argc, const char **argv)
 		ctx->local_qp_attrs[i].lid = get_local_lid(ctx->context);
 		ctx->local_qp_attrs[i].qpn = ctx->qp[i]->qp_num;
 		ctx->local_qp_attrs[i].psn = lrand48() & 0xffffff;
-		printf("Local address of RC QP %d: ", i);
-		print_qp_attr(ctx->local_qp_attrs[i]);
+		// printf("Local address of RC QP %d: ", i);
+		// print_qp_attr(ctx->local_qp_attrs[i]);
 	}
 
     if (argc >= 1)
@@ -168,27 +155,22 @@ int main(const int argc, const char **argv)
         fprintf(stderr, "Usage: bus <node-id>...\n");
         return 1;
     }
-	cout << "Exchange done!" << endl;
+	// cout << "Exchange done!" << endl;
 	for(int i = 0;i < NODE_CNT; i++){
-		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 0);
+		connect_ctx(ctx, ctx->local_qp_attrs[i].psn, ctx->remote_qp_attrs[i], ctx->qp[i], 0, i);
 	}
 	
 	cout << "QPs Connected" << endl;
 	
-	singleThreadTest(ctx);
+	// singleThreadTest(ctx);
+	snprintf(req_area, MSG_SIZE, "This is from Node: %d", ctx->id);
+	snprintf(resp_area, MSG_SIZE, "This is from Node: %d", ctx->id);
 
-    // thread rrecv(rdma_recv_thread, ctx, 10);
-	// thread rsend(rdma_send_thread, ctx, 10);
+	thread remote_reader(rdma_remote_read_thread, ctx);
+	thread remote_writer(rdma_remote_write_thread, ctx);
+	thread local_reader(local_read_thread, ctx);
 
-    // rsend.join();
-    // rrecv.join();
-
-	// thread remote_reader(rdma_remote_read_thread, ctx);
-	// thread local_writer(local_write_thread, ctx);
-	// thread local_reader(rdma_local_read_thread, ctx);
-
-	// remote_reader.join();
-	// local_writer.join();
-	// local_reader.join();
-
+	remote_reader.join();
+	remote_writer.join();
+	local_reader.join();
 }

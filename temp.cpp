@@ -24,10 +24,17 @@ char* buf_print(char* buf){
 }
 
 int main(){
+    char msg[256];
     char* buf, buf2;
     buf = (char *)malloc(256);
+    memset(buf, '-1', 5);
+    if(buf[0] == '-1'){
+        cout << "Is -1" << endl;
+        cout << sizeof(buf) << endl;
+    }
     cout << "Previously: "<< buf_print(buf) << endl;
-    memset(buf, '*', 5);
-    cout << "Buffer: " << buf_print(buf) << endl;
+    memset(buf, '*', 52);
+    strcpy(msg, buf);
+    cout << sizeof(msg) << " " << msg << endl;
     return 0;
 }

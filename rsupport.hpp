@@ -1,3 +1,11 @@
+/*
+Following code is used for RDMA Setup and Operations
+1. Register the memory regions req_area, resp_area with RDMA device. The mr attributes are saved in STAGs
+2. These REQ_STAGs and RESP_STAGs are exchanged between the nodes that are supposed to communicate with one another. Ref: bus.hpp
+3. To increment size of memeory allocation: increase MSG_SIZE here under
+4. The communication operations are implemented in trans.cpp
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <infiniband/verbs.h>
@@ -49,8 +57,7 @@ void post_recv(struct context *ctx, int num_recvs, int qpn, char  *local_addr, i
 void post_send(struct context *ctx, int qpn, char *local_addr, int local_key, int signal, int size);
 void post_write(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
 void post_read(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
-
-
+ 
 //APIs to be used for actual operations
 void rdma_local_write(struct context *ctx, char* local_area, char* buf);
 char* rdma_local_read(struct context *ctx, char* local_area, char* buf);
@@ -173,7 +180,7 @@ uint16_t get_local_lid(struct ibv_context *context)
 }
 
 
-int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv_qp* qp, int use_uc)
+int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv_qp* qp, int use_uc, int i)
 {
 	struct ibv_qp_attr *conn_attr;
     conn_attr = (struct ibv_qp_attr *)malloc(sizeof(struct ibv_qp_attr));
@@ -187,7 +194,7 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 	conn_attr->ah_attr.port_num = PRIMARY_IB_PORT;
     conn_attr->min_rnr_timer = 12;
 
-    cout << "DEBUG: " << "Connecting context id: " << ctx->id << " to dest qpn: " << dest.qpn << endl;
+    // cout << "DEBUG: " << "Connecting context id: " << ctx->id << " to dest qpn: " << dest.qpn << endl;
 
 	int rtr_flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN
 		| IBV_QP_RQ_PSN | IBV_QP_MIN_RNR_TIMER;
@@ -199,10 +206,10 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 	} 
 	
 	if (ibv_modify_qp(qp, conn_attr, rtr_flags)) {
-		fprintf(stderr, "ibv_modify_qp to rtr failed: %s\n", strerror(errno));
+		fprintf(stderr, "ibv_modify_qp to rtr failed: %s for node %d\n", strerror(errno), i);
 		return 1;
 	}
-    cout << "IBV_MODIFY_QP: RTR" << endl;
+    // cout << "IBV_MODIFY_QP: RTR" << endl;
 	memset(conn_attr, 0, sizeof(conn_attr));
 	conn_attr->qp_state	    = IBV_QPS_RTS;
 	conn_attr->sq_psn	    = my_psn;
@@ -222,7 +229,7 @@ int connect_ctx(struct context *ctx, int my_psn, struct qp_attr dest, struct ibv
 		fprintf(stderr, "Failed to modify QP to RTS\n");
 		return 1;
 	}
-    cout << "IBV_MODIFY_QP: RTS" << endl;
+    // cout << "IBV_MODIFY_QP: RTS" << endl;
 	return 0;
 }
 
@@ -436,7 +443,7 @@ void post_write(struct context *ctx, int qpn,
 	uint64_t remote_addr, int remote_key, int signal, int size)
 {
     struct ibv_send_wr *bad_send_wr;
-    cout << "DEBUG: " << "POSTING WRITE" << endl;
+    // cout << "DEBUG: " << "POSTING WRITE" << endl;
 
 	ctx->sgl.addr = (uintptr_t) local_addr;
 	ctx->sgl.lkey = local_key;
@@ -455,7 +462,7 @@ void post_write(struct context *ctx, int qpn,
 	ctx->wr.wr.rdma.rkey = remote_key;
 
 	int ret = ibv_post_send(ctx->qp[qpn], &ctx->wr, &bad_send_wr); //  &wrbatch[0]
-    cout << "DEBUG: " << "POSTED WRITE ibv_post_send returned: " << ret << endl;
+    // cout << "DEBUG: " << "POSTED WRITE ibv_post_send returned: " << ret << endl;
     if(ret){
     	perror("WRITE ERROR: ");
     }
