@@ -1,16 +1,33 @@
 #include <iostream>
+#include <unistd.h>
+#include <stdlib.h>
+#include <malloc.h>
+#include <assert.h>
+#include <byteswap.h>
+#include <endian.h>
+#include <errno.h>
+#include <getopt.h>
+#include <infiniband/verbs.h>
+#include <inttypes.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 using namespace std;
 
+char* buf_print(char* buf){
+    return buf;
+}
+
 int main(){
-    volatile int64_t *ptr1, *ptr2;
-    ptr1 = (volatile int64_t *) calloc(0, sizeof(ptr1));
-    ptr2 = (volatile int64_t *) calloc(0, sizeof(ptr2));
-
-    *ptr1 = 12;
-    *ptr2 = 23;
-
-    cout << *ptr1 << *ptr2 << "  " << (uintptr_t) ptr1 << "  " << (uintptr_t) ptr2 << endl;
-    cout << &ptr1 << " " << &ptr2 << endl;
+    char* buf, buf2;
+    buf = (char *)malloc(256);
+    cout << "Previously: "<< buf_print(buf) << endl;
+    memset(buf, '*', 5);
+    cout << "Buffer: " << buf_print(buf) << endl;
     return 0;
 }
