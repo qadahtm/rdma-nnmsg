@@ -24,17 +24,16 @@ char* buf_print(char* buf){
 }
 
 int main(){
-    char msg[256];
-    char* buf, buf2;
-    buf = (char *)malloc(256);
-    memset(buf, '-1', 5);
-    if(buf[0] == '-1'){
-        cout << "Is -1" << endl;
-        cout << sizeof(buf) << endl;
+    char **buf;
+    buf = (char **)malloc(10 * sizeof(char *));
+    for(int i = 0; i< 10; i++){
+        buf[i] = (char *)malloc(256);
     }
-    cout << "Previously: "<< buf_print(buf) << endl;
-    memset(buf, '*', 52);
-    strcpy(msg, buf);
-    cout << sizeof(msg) << " " << msg << endl;
+    for(int i = 0; i< 10; i++){
+        snprintf(buf[i], 256,"This is message: %d", i);
+    }
+    for(int i = 0; i< 10; i++){
+        cout << buf[i] << endl;
+    }
     return 0;
 }

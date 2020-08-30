@@ -262,15 +262,21 @@ int node(const int argc, const char **argv, struct context *ctx)
     char myurl[30], url[30];
     int to = 100, count = 0;
 
-    resp_area_stag[id].rkey = resp_area_mr->rkey;
+    for(int i = 0; i< NODE_CNT; i++){
+        resp_area_stag[id].rkey[i] = resp_area_mr[i]->rkey;
+        resp_area_stag[id].buf[i] = (uintptr_t) resp_area[i];
+    }
+    
     resp_area_stag[id].size = MSG_SIZE;
     resp_area_stag[id].id = ctx->id;
-    resp_area_stag[id].buf = (uintptr_t) resp_area;
 
+    for(int i = 0; i< NODE_CNT; i++){
+        req_area_stag[id].rkey[i] = req_area_mr[i]->rkey;
+        req_area_stag[id].buf[i] = (uintptr_t) req_area[i];
+    }
     req_area_stag[id].id = ctx->id;
-    req_area_stag[id].rkey = req_area_mr->rkey;
     req_area_stag[id].size = MSG_SIZE;
-    req_area_stag[id].buf = (uintptr_t) req_area;
+
 
 
     // char my_serialized_stag[sizeof(struct stag)+1];
