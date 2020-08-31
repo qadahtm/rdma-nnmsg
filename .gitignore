@@ -1,9 +1,0 @@
-*.o
-trans
-temp.cpp
-temp
-run_resilient_dp.py
-*.tar.xz
-*.txt
-*sh
-1
