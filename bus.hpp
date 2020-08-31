@@ -103,7 +103,7 @@ void recv_thread(int id, struct context *ctx)
             continue;
         }
         int sock = recv_sockets.find(i)->second;
-        int r = nn_recv(sock, &req_area_stag[i], sizeof(struct stag) + 1, 1);
+        int r = nn_recv(sock, &req_area_stag[i], sizeof(struct stag), 1);
         if (r > 1)
         {
             count++;
@@ -175,7 +175,7 @@ void send_thread(int id, struct context *ctx)
             continue;
         }
         int sock = send_sockets.find(i)->second;
-        int s = nn_send(sock, &resp_area_stag[id], sizeof(struct stag) + 1, 1);
+        int s = nn_send(sock, &resp_area_stag[id], sizeof(struct stag), 1);
         /*if(send < 0)
         {
 			fprintf(stderr, "send failed: %s\n", strerror(errno));
@@ -211,7 +211,7 @@ void send_thread(int id, struct context *ctx)
             continue;
         }
         int sock = send_sockets.find(i)->second;
-        int s = nn_send(sock, &req_area_stag[id], sizeof(struct stag) + 1, 1);
+        int s = nn_send(sock, &req_area_stag[id], sizeof(struct stag), 1);
         if (s > 1)
         {
             // cout << "Sent to" << i << endl;
@@ -268,13 +268,13 @@ int node(const int argc, const char **argv, struct context *ctx)
     }
     
     resp_area_stag[id].size = MSG_SIZE;
-    resp_area_stag[id].id = ctx->id;
+    resp_area_stag[id].id = id;
 
     for(int i = 0; i< NODE_CNT; i++){
         req_area_stag[id].rkey[i] = req_area_mr[i]->rkey;
         req_area_stag[id].buf[i] = (uintptr_t) req_area[i];
     }
-    req_area_stag[id].id = ctx->id;
+    req_area_stag[id].id = id;
     req_area_stag[id].size = MSG_SIZE;
 
 
@@ -317,21 +317,21 @@ int node(const int argc, const char **argv, struct context *ctx)
 
     one.join();
     two.join();
-    cout << "resp_area stags:" << endl;
+    // cout << "resp_area stags:" << endl;
 
-    for (int i = 0; i < NODE_CNT; i++)
-    {
-        if (i == id)
-            continue;
-        print_stag(resp_area_stag[i]);
-    }
-    cout << "req_area stags:" << endl;
-    for (int i = 0; i < NODE_CNT; i++)
-    {
-        if (i == id)
-            continue;
-        print_stag(req_area_stag[i]);
-    }
+    // for (int i = 0; i < NODE_CNT; i++)
+    // {
+    //     if (i == id)
+    //         continue;
+    //     print_stag(resp_area_stag[i]);
+    // }
+    // cout << "req_area stags:" << endl;
+    // for (int i = 0; i < NODE_CNT; i++)
+    // {
+    //     if (i == id)
+    //         continue;
+    //     print_stag(req_area_stag[i]);
+    // }
     for (int i = 0; i < NODE_CNT ; i++){
         if (i == id){
             continue;

@@ -15,15 +15,18 @@ Following code is used for RDMA Setup and Operations
 #include <getopt.h>
 #include <errno.h>
 #include <unistd.h>
+#include <mutex>
 
 using namespace std;
 
-#define NODE_CNT 3
+#define NODE_CNT 5
 
 #define TX_DEPTH 1
 #define PRIMARY_IB_PORT 1
 #define KB 1024
-#define MSG_SIZE 256 * sizeof(char) * KB
+#define MSG_SIZE 256 * sizeof(char)
+#define REQUEST 1
+#define RESP 2
 
 
 #define CPE(val, msg, err_code)                    \
@@ -34,12 +37,13 @@ using namespace std;
         exit(err_code);                            \
     }
 
+std::mutex mtx;
+
 //These are the memory regions
 char **req_area, **resp_area, **local_read;
 
 //Registered memory
 struct ibv_mr **req_area_mr, **resp_area_mr, **local_read_mr;
-
 
 //Following are the functions to support RDMA operations:
 union ibv_gid get_gid(struct ibv_context *context);
@@ -107,6 +111,8 @@ struct context
     int is_client, id;
     int sock_port;
 };
+
+struct context *ctx;
 
 static struct context *init_ctx(struct context *ctx, struct ibv_device *ib_dev)
 {
@@ -259,7 +265,7 @@ void qp_to_init(struct context* ctx)
 static int poll_cq(struct ibv_cq *cq, int num_completions)
 {
 
-    cout << "DEBUG: Polling for completions" << endl;
+    // cout << "DEBUG: Polling for completions" << endl;
     struct timespec end;
     struct timespec start;
     struct ibv_wc *wc = (struct ibv_wc *)malloc(
@@ -279,7 +285,7 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
                     perror("poll_recv_cq error");
                     exit(0);
                 }
-                cout << "DEBUG: Completed work request: " << wc[i].wr_id << endl;
+                // cout << "DEBUG: Completed work request: " << wc[i].wr_id << endl;
             }
         }
         // clock_gettime(CLOCK_REALTIME, &end);
@@ -292,7 +298,7 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
         //     break;
         // }
     }
-    cout << "DEBUG: " << "Completions: " << completions << "Status: " << wc[0].imm_data << endl ;
+    // cout << "DEBUG: " << "Completions: " << completions << "Status: " << wc[0].imm_data << endl ;
 }
 
 // int setup_buffers(struct context* ctx){
@@ -314,18 +320,19 @@ int setup_buffers(struct context* ctx){
     
     resp_area = ( char **) malloc(NODE_CNT*sizeof(char *));
     resp_area_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
-    for(int i = 0; i <NODE_CNT;i++){
-        resp_area[i] = (char *) memalign(4096, 64 * KB * sizeof(char));
-        resp_area_mr[i] = ibv_reg_mr(ctx->pd, (char *) resp_area[i], 64 * KB * sizeof(char), FLAGS);
-        memset((char *) resp_area[i], 0 , 64 * KB * sizeof(char));
+    for(int i = 0; i < NODE_CNT;i++){
+        resp_area[i] = (char *) memalign(4096, MSG_SIZE);
+        resp_area_mr[i] = ibv_reg_mr(ctx->pd, (char *) resp_area[i], MSG_SIZE, FLAGS);
+        memset((char *) resp_area[i], 0 , MSG_SIZE);
     }
     cout << "resp_area_mr set" << endl;
+
     req_area = ( char **) malloc(NODE_CNT*sizeof(char *));
     req_area_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
-    for(int i = 0; i <NODE_CNT; i++){
-        req_area[i] = (char *)memalign(4096, 64 * KB * sizeof(char));
-        req_area_mr[i] = ibv_reg_mr(ctx->pd, (char *) resp_area[i], 64 * KB * sizeof(char), FLAGS);
-        memset((char *)req_area[i], 0 , 64 * KB * sizeof(char));
+    for(int i = 0; i < NODE_CNT; i++){
+        req_area[i] = (char *)memalign(4096, MSG_SIZE);
+        req_area_mr[i] = ibv_reg_mr(ctx->pd, (char *) req_area[i], MSG_SIZE, FLAGS);
+        memset((char *)req_area[i], 0 , MSG_SIZE);
     }
     cout << "req_area_mr set" << endl;
 }
@@ -500,7 +507,7 @@ void post_read(struct context *ctx, int qpn,
 	ctx->wr.wr.rdma.rkey = remote_key;
 		
 	int ret = ibv_post_send(ctx->qp[qpn], &ctx->wr , &bad_send_wr); //&wrbatch[0]
-		
+	// cout << "DEBUG: ibv_post_send returned: " << ret << endl;
 	CPE(ret, "ibv_post_send error", ret);
 
 }
@@ -560,8 +567,44 @@ char* rdma_local_read(struct context *ctx, char* local_area){
     return local_area;
 }
 int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey){
-    cout << "Reading remote" << endl;
+    // cout << "DEBUG: Reading remote" << endl;
     post_read(ctx, dest, local_area, lkey, remote_buf, rkey, 1, MSG_SIZE);
-    cout << "Polling for completions" << endl;
+    // cout << "DEBUG: Polling for completions" << endl;
     return poll_cq(ctx->cq[dest], 1);
 }
+
+// char* remote_read(int dest, int client,int flag){
+//     switch(flag){
+//         case 1:{
+//             mtx.lock();
+// 		    while(req_area[dest] && req_area[dest][0] == 0){
+//                 rdma_remote_read(ctx, dest, req_area[client], req_area_mr[client]->lkey, req_area_stag[dest].buf[client], req_area_stag[dest].rkey[client]);
+//             }
+//             mtx.unlock();
+//             return req_area[client];
+//         }
+//         case 2:{
+//             mtx.lock();
+// 		    while(resp_area[dest] && resp_area[dest][0] == 0){
+//                 rdma_remote_read(ctx, dest, resp_area[dest], resp_area_mr[dest]->lkey, resp_area_stag[dest].buf[ctx->id], resp_area_stag[dest].rkey[ctx->id]);
+//             }
+//             mtx.unlock();
+//             return resp_area[dest];
+//         }
+//     }
+// }
+
+// void remote_write(char *msg, int dest, int flag){
+//     if(flag == REQUEST){
+//         strcpy(req_area[dest], msg);
+//         mtx.lock();
+//         rdma_remote_write(ctx, dest, req_area[dest], req_area_mr[dest]->lkey, req_area_stag[dest].buf[ctx->id], req_area_stag[dest].rkey[ctx->id]);
+//         mtx.unlock();
+//     }
+//     if(flag == RESP){
+//         strcpy(resp_area[dest], msg);
+//         mtx.lock();
+//         rdma_remote_write(ctx, dest, resp_area[dest], resp_area_mr[dest]->lkey, resp_area_stag[dest].buf[ctx->id], resp_area_stag[dest].rkey[ctx->id]);
+//         mtx.unlock();
+//     }
+// }
