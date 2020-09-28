@@ -19,7 +19,9 @@ Following code is used for RDMA Setup and Operations
 
 using namespace std;
 
-#define NODE_CNT 5
+#define NODE_CNT 2
+#define REPLICA 1
+#define CLIENT 1
 
 #define TX_DEPTH 1
 #define PRIMARY_IB_PORT 1
@@ -27,7 +29,6 @@ using namespace std;
 #define MSG_SIZE 256 * sizeof(char)
 #define REQUEST 1
 #define RESP 2
-
 
 #define CPE(val, msg, err_code)                    \
     if (val)                                       \
@@ -40,10 +41,10 @@ using namespace std;
 std::mutex mtx;
 
 //These are the memory regions
-char **req_area, **resp_area, **local_read;
+char **client_req_, **signed_req_area, **replica_mem_area, *local_area;
 
 //Registered memory
-struct ibv_mr **req_area_mr, **resp_area_mr, **local_read_mr;
+struct ibv_mr **client_req_mr, **signed_req_mr, **replica_mem_mr, *local_area_mr;
 
 //Following are the functions to support RDMA operations:
 union ibv_gid get_gid(struct ibv_context *context);
@@ -62,14 +63,14 @@ void post_recv(struct context *ctx, int num_recvs, int qpn, char  *local_addr, i
 void post_send(struct context *ctx, int qpn, char *local_addr, int local_key, int signal, int size);
 void post_write(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
 void post_read(struct context *ctx, int qpn, char *local_addr, int local_key, uint64_t remote_addr, int remote_key, int signal, int size);
-
+void post_atomic(struct context *ctx, int qpn, char *local_addr, int local_key, unsigned long remote_addr, int remote_key, int64_t compare, int64_t swap, int signal, int size);
  
 //APIs to be used for actual operations
 void rdma_local_write(struct context *ctx, char* local_area, char* buf);
 char* rdma_local_read(struct context *ctx, char* local_area, char* buf);
 int rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey);
 int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey);
-
+void rdma_atomic(struct ctrl_blk *ctx, int qpn, char *local_addr, int local_key, unsigned long remote_buf, int rkey, char compare, char swap);
 
 struct qp_attr
 {
@@ -89,7 +90,7 @@ struct stag
 };
 
 //Stag for response and request
-struct stag req_area_stag[NODE_CNT], resp_area_stag[NODE_CNT];
+struct stag client_req_stag[NODE_CNT], signed_req_stag[NODE_CNT] ,replica_mem_stag[NODE_CNT], exe_mem_stag[NODE_CNT];
 
 struct context
 {
@@ -113,6 +114,18 @@ struct context
 };
 
 struct context *ctx;
+
+bool isClient(struct context *ctx){
+    if(ctx->id > NODE_CNT - REPLICA){
+        return true;
+    }
+}
+
+bool isPrimary(struct context *ctx){
+    if(ctx->id == 0){
+        return true;
+    }
+}
 
 static struct context *init_ctx(struct context *ctx, struct ibv_device *ib_dev)
 {
@@ -170,7 +183,7 @@ union ibv_gid get_gid(struct ibv_context *context)
 	ibv_query_gid(context,PRIMARY_IB_PORT, 0, &ret_gid);
 
 	// printf("GID: Interface id = %lld subnet prefix = %lld\n", 
-	// 	(long long) ret_gid.global.interface_id, 
+	// 	(long long) ret_gid.global.interface_id,
 	// 	(long long) ret_gid.global.subnet_prefix);
     
     cout << "Global Interface ID: " << ret_gid.global.interface_id << " Subnet Prefix: " << ret_gid.global.subnet_prefix << endl;
@@ -251,7 +264,7 @@ void qp_to_init(struct context* ctx)
     attr->qp_state = IBV_QPS_INIT;
     attr->pkey_index = 0;
     attr->port_num = PRIMARY_IB_PORT;
-    attr->qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+    attr->qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
     for(int i = 0; i < ctx->num_conns; i++){
         ibv_modify_qp(ctx->qp[i], attr,
@@ -285,6 +298,7 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
                     perror("poll_recv_cq error");
                     exit(0);
                 }
+                //cout << wc[i].opcode << endl;
                 // cout << "DEBUG: Completed work request: " << wc[i].wr_id << endl;
             }
         }
@@ -314,28 +328,51 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
 // }
 
 /*For Multiple Memory Registration*/
+
+int setup_client_buffer(struct context *ctx){
+    int FLAGS = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | 
+			IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+    client_req_ = (char **) malloc(NODE_CNT*sizeof(char *));
+    client_req_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
+    for(int i = 0; i < NODE_CNT;i++){
+        cout << "DEBUG MEM: SIGNED" << i << endl;
+        client_req_[i] = (char *) memalign(256, MSG_SIZE);
+        client_req_mr[i] = ibv_reg_mr(ctx->pd, (char *) client_req_[i], MSG_SIZE, FLAGS);
+        memset( client_req_[i], 0, MSG_SIZE);
+    }
+}
+
 int setup_buffers(struct context* ctx){
     int FLAGS = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | 
 				IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
-    
-    resp_area = ( char **) malloc(NODE_CNT*sizeof(char *));
-    resp_area_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
-    for(int i = 0; i < NODE_CNT;i++){
-        resp_area[i] = (char *) memalign(4096, MSG_SIZE);
-        resp_area_mr[i] = ibv_reg_mr(ctx->pd, (char *) resp_area[i], MSG_SIZE, FLAGS);
-        memset((char *) resp_area[i], 0 , MSG_SIZE);
-    }
-    cout << "resp_area_mr set" << endl;
 
-    req_area = ( char **) malloc(NODE_CNT*sizeof(char *));
-    req_area_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
-    for(int i = 0; i < NODE_CNT; i++){
-        req_area[i] = (char *)memalign(4096, MSG_SIZE);
-        req_area_mr[i] = ibv_reg_mr(ctx->pd, (char *) req_area[i], MSG_SIZE, FLAGS);
-        memset((char *)req_area[i], 0 , MSG_SIZE);
+    signed_req_area = ( char **) malloc(NODE_CNT*sizeof(char *));
+    signed_req_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
+    for(int i = 0; i < NODE_CNT;i++){
+        cout << "DEBUG MEM: SIGNED" << i << endl;
+        signed_req_area[i] = (char *) memalign(256, MSG_SIZE);
+        signed_req_mr[i] = ibv_reg_mr(ctx->pd, (char *) signed_req_area[i], MSG_SIZE, FLAGS);
+        memset(signed_req_area[i], 0 , MSG_SIZE);
     }
-    cout << "req_area_mr set" << endl;
+
+    replica_mem_area = (char **) malloc(NODE_CNT*sizeof(char *));
+    replica_mem_mr = (struct ibv_mr **) malloc(NODE_CNT*sizeof(struct ibv_mr *));
+    for(int i = 0; i < NODE_CNT;i++){
+        cout << "DEBUG MEM: REPLICA" << i << endl;
+        replica_mem_area[i] = (char *) memalign(256, MSG_SIZE);
+        replica_mem_mr[i] = ibv_reg_mr(ctx->pd, (char *) replica_mem_area[i], MSG_SIZE, FLAGS);
+        memset(replica_mem_area[i], 0 , MSG_SIZE);
+    }
+
+    local_area = (char *) memalign(256, MSG_SIZE);
+    local_area_mr = ibv_reg_mr(ctx->pd, (char *) local_area, MSG_SIZE, FLAGS);
+    memset(local_area, 0, MSG_SIZE);
+    setup_client_buffer(ctx);
+    return 0;
 }
+
+
+
 
 /*
  *  *****Currently not in use*****
@@ -355,7 +392,7 @@ static int qp_to_rtr(struct ibv_qp *qp, struct context *ctx)
     attr->dest_qp_num = ctx->remote_qp_attrs->qpn;
     attr->rq_psn = ctx->remote_qp_attrs->psn;
     attr->max_dest_rd_atomic = 1;
-    attr->min_rnr_timer = 12;
+    attr->min_rnr_timer = 0x12;
     attr->ah_attr.is_global = 0;
     attr->ah_attr.dlid = ctx->remote_qp_attrs->lid;
     attr->ah_attr.sl = 1; //may have to change
@@ -409,7 +446,7 @@ static int qp_to_rts(struct ibv_qp *qp, struct context* ctx)
     return 0;
 }
 
-void post_recv(struct context *ctx, int num_recvs, int qpn,  char  *local_addr, int local_key, int size)
+void post_recv(struct context *ctx, int num_recvs, int qpn,  void  *local_addr, int local_key, int size)
 {
 	int ret;
 	struct ibv_sge list;
@@ -426,7 +463,7 @@ void post_recv(struct context *ctx, int num_recvs, int qpn,  char  *local_addr, 
 	CPE(ret, "Error posting recv\n", ret);
 }
 
-void post_send(struct context *ctx, int qpn,  char *local_addr, int local_key, int signal, int size)
+void post_send(struct context *ctx, int qpn,  void *local_addr, int local_key, int signal, int size)
 { 
 	struct ibv_send_wr *bad_send_wr;
 	ctx->sgl.addr = (uintptr_t) local_addr;
@@ -512,6 +549,32 @@ void post_read(struct context *ctx, int qpn,
 
 }
 
+
+void post_atomic(struct context *ctx, int dest, 
+	char *local_addr, int local_key, 
+	unsigned long remote_addr, int remote_key, int64_t compare, int64_t swap, int signal, int size)
+{
+    struct ibv_send_wr *bad_send_wr = NULL;
+	ctx->sgl.addr = (uintptr_t) local_addr;
+	ctx->sgl.lkey = local_key;
+	
+    memset(&ctx->wr, 0, sizeof(ctx->wr));
+	ctx->wr.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
+	if(signal){
+		ctx->wr.send_flags |= IBV_SEND_SIGNALED;
+	}
+    ctx->wr.next = NULL;
+	ctx->wr.sg_list = &ctx->sgl;
+	ctx->wr.sg_list->length = size;
+	ctx->wr.num_sge = 1;
+    ctx->wr.wr.atomic.remote_addr = remote_addr;
+    ctx->wr.wr.atomic.rkey = remote_key;
+    ctx->wr.wr.atomic.compare_add = compare;
+    ctx->wr.wr.atomic.swap = swap ;
+	int ret = ibv_post_send(ctx->qp[dest], &ctx->wr, &bad_send_wr); //  &wrbatch[0]
+	CPE(ret, "ibv_post_send error", ret);
+}
+
 static void detroy_ctx(struct context *ctx)
 {
     if (ctx->qp)
@@ -530,10 +593,7 @@ static void detroy_ctx(struct context *ctx)
     {
         ibv_close_device(ctx->context);
     }
-    free((void *)resp_area);
-    free((void *) req_area);
-    free(resp_area_mr);
-    free(req_area_mr);
+    //free memory regions
 }
 void print_stag(struct stag st)
 {
@@ -543,27 +603,27 @@ void print_stag(struct stag st)
     }
 }
 
-int rdma_send(struct context *ctx, int qpn,  char *local_addr, int local_key, int signal, int size){
+int rdma_send(struct context *ctx, int qpn,  void *local_addr, int local_key, int signal, int size){
     post_send(ctx, qpn, local_addr, local_key,signal,size);
 	poll_cq(ctx->cq[qpn], 1);
     // cout << "Send queue polled" << endl;
     return size;
 }
 
-int rdma_recv(struct context *ctx, int num_recvs, int qpn,  char  *local_addr, int local_key, int size){
+int rdma_recv(struct context *ctx, int num_recvs, int qpn,  void *local_addr, int local_key, int size){
     post_recv(ctx, num_recvs, qpn, local_addr, local_key,size);
     poll_cq(ctx->cq[qpn], num_recvs);
     // cout << "Recieve queue polled" << endl;
 }
 
-void rdma_local_write(struct context *ctx, char* local_area, char* buf){
-	strcpy(local_area, buf);
+void rdma_local_write(struct context *ctx, void* local_area, void* buf){
+	strcpy((char *)local_area, (char *)buf);
 }
 int rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey){
 	post_write(ctx, dest, local_area, lkey, remote_buf, rkey, 1, MSG_SIZE);
 	return poll_cq(ctx->cq[dest], 1);
 }
-char* rdma_local_read(struct context *ctx, char* local_area){
+void* rdma_local_read(struct context *ctx, void* local_area){
     return local_area;
 }
 int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey){
@@ -571,6 +631,10 @@ int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, 
     post_read(ctx, dest, local_area, lkey, remote_buf, rkey, 1, MSG_SIZE);
     // cout << "DEBUG: Polling for completions" << endl;
     return poll_cq(ctx->cq[dest], 1);
+}
+
+void rdma_cas(struct context *ctx, int dest, char *local_addr, int local_key, unsigned long remote_addr, int remote_key, char compare, char swap){
+    post_atomic(ctx, dest, local_addr, local_key, remote_addr, remote_key, compare, swap, 1, 8);
 }
 
 // char* remote_read(int dest, int client,int flag){

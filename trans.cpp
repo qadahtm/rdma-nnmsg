@@ -1,96 +1,19 @@
 #include "bus.hpp"
 
-
-//For Testing send and Recv
-// void rdma_send_thread(struct context *ctx, int total){
-// 	*req_area = 121;
-// 	int co = 0;
-// 	while(co < total){
-// 		for(int i = 0; i < NODE_CNT ;i++){
-// 			if(i == ctx->id){
-// 				continue;
-// 			}
-// 			int dest = i;
-// 			rdma_send(ctx, dest, req_area, req_area_mr->lkey,0,MSG_SIZE);
-// 		}
-// 		co++;
-// 	}
-// }
-// void rdma_recv_thread(struct context *ctx, int total){
-// 	int co = 0, rc = 0;
-// 	while(co < total){
-// 		int i = 0;
-// 		for(int i = 0; i < NODE_CNT; i++){
-// 			if(i == ctx->id){
-// 				continue;
-// 			}
-// 			int src = i;
-// 		 	rdma_recv(ctx, 1, src, resp_area, resp_area_mr->lkey,MSG_SIZE);
-// 			cout << "RDMA Recieved Data:" << *resp_area << endl;
-// 		}
-// 		co++;
-// 	}
-// }
-
-void remote_writer_thread(){
-	if(ctx->id < 4){
-		mtx.lock();
-		char *msg = (char *)malloc(256);
-		snprintf(msg, 256, "This response is from %d", ctx->id);
-		strcpy(resp_area[4], msg);
-		rdma_remote_write(ctx, 4, resp_area[4], resp_area_mr[4]->lkey, resp_area_stag[4].buf[ctx->id], resp_area_stag[4].rkey[ctx->id]);
-		mtx.unlock();
-	}
-	if(ctx->id == 4){
-		mtx.lock();
-		char *msg = (char *)malloc(256);
-		snprintf(msg, 256, "CLIENT REQUEST from %d", ctx->id);
-		strcpy(req_area[0], msg);
-		rdma_remote_write(ctx, 0, req_area[0], req_area_mr[0]->lkey, req_area_stag[0].buf[ctx->id], req_area_stag[0].rkey[ctx->id]);
-		mtx.unlock();
-	}
-}
-
-void local_reader_thread(){
-	sleep(1);
-	for(int i = 0; i< NODE_CNT; i++) {
-		if(req_area[i][0] != 0)
-			cout << "REQ from node: " << i << " : " << req_area[i] << endl;
-		if(resp_area[i][2] != 0)
-			if(ctx -> id == 4) {
-				cout << "RESP from node: " << i << " : " << resp_area[i] << endl;
-			} else {
-				cout << "RESP to node: " << i << " : " << resp_area[i] << endl;
-			}
-	}
-}
-
-void remote_reader_thread(){
-	if(ctx->id > 0 && ctx->id < 4){
-		mtx.lock();
-		while(req_area[0] && req_area[0][0] == 0){
-			rdma_remote_read(ctx, 0, req_area[0], req_area_mr[0]->lkey, req_area_stag[0].buf[4], req_area_stag[0].rkey[4]);
-		}
-		mtx.unlock();
-		// cout << "Request read from node " << 0 << " : " << req_area[0] << endl;
-	}
-}
-
 void singleThreadTest(struct context *ctx){
-	if (ctx->id == 0){
-		snprintf(resp_area[0], 64,"This is a message in node %d", ctx->id);
-		snprintf(resp_area[1], 64,"This is a message to be written by node %d", ctx->id);
-		snprintf(resp_area[2], 64,"This is a message to be written by node %d", ctx->id);
-		rdma_remote_write(ctx, 1, resp_area[1], resp_area_mr[1]->lkey, resp_area_stag[1].buf[0], resp_area_stag[1].rkey[0]);
-		rdma_remote_write(ctx, 2, resp_area[2], resp_area_mr[2]->lkey, resp_area_stag[2].buf[0], resp_area_stag[2].rkey[0]);
-		sleep(5);
+	if(ctx->id == 0){
+		cout << "Before: " << (int)local_area[0] << endl;
+		rdma_cas(ctx, 1, local_area, local_area_mr->lkey, client_req_stag[1].buf[0], client_req_stag[1].rkey[0], 0, 2);
+		// rdma_remote_write(ctx, 1, local_area, local_area_mr->lkey, client_req_stag[1].buf[0], client_req_stag[1].rkey[0]);
+		poll_cq(ctx->cq[1],1);
+		cout << "Before read: " << (int)local_area[0] << endl;
+		rdma_remote_read(ctx, 1, local_area, local_area_mr->lkey, client_req_stag[1].buf[0], client_req_stag[1].rkey[0]);
+		cout << "After: " << (int)local_area[0] << endl;
 	}
-	else{
-		cout << "Single Thread test" << endl;
-		rdma_remote_read(ctx, 0, resp_area[ctx->id], resp_area_mr[ctx->id]->lkey, resp_area_stag[0].buf[0], resp_area_stag[0].rkey[0]);
-		cout << "Node: " << 0 << " had message " << resp_area[ctx->id] << endl;
-		sleep(8);
-		cout << "I recieved messaged from " << resp_area[0] << endl;
+	if(ctx->id == 1){
+		cout << (int)client_req_[0][0] << endl;
+		sleep(10);
+		cout << (int)client_req_[0][0] << endl;
 	}
 }
 
@@ -154,17 +77,16 @@ int main(const int argc, const char **argv)
 	
 	cout << "QPs Connected" << endl;
 	
-	// singleThreadTest(ctx);
-	if(ctx->id == 4){
-		strcpy(req_area[0], "Message from the client");
-	}
+	singleThreadTest(ctx);
+	// if(ctx->id == 4){
+	// 	strcpy(req_area[0], "Message from the client");
+	// }
 
-	thread remote_reader(remote_reader_thread);
-	thread remote_writer(remote_writer_thread);
-	thread local_reader(local_reader_thread);
+	// thread remote_reader(remote_reader_thread);
+	// thread remote_writer(remote_writer_thread);
+	// thread local_reader(local_reader_thread);
 
-
-	remote_reader.join();
-	remote_writer.join();
-	local_reader.join();
+	// remote_reader.join();
+	// remote_writer.join();
+	// local_reader.join();
 }
