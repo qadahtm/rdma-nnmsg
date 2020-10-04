@@ -19,9 +19,7 @@ Following code is used for RDMA Setup and Operations
 
 using namespace std;
 
-#define NODE_CNT 2
-#define REPLICA 1
-#define CLIENT 1
+#define NODE_CNT 5
 
 #define TX_DEPTH 1
 #define PRIMARY_IB_PORT 1
@@ -42,9 +40,11 @@ std::mutex mtx;
 
 //These are the memory regions
 char **client_req_, **signed_req_area, **replica_mem_area, *local_area;
+char **client_lock, **signed_req_lock, **replica_mem_lock, *local_lock;
 
 //Registered memory
 struct ibv_mr **client_req_mr, **signed_req_mr, **replica_mem_mr, *local_area_mr;
+struct ibv_mr **client_lock_mr, **signed_req_lock_mr, ** replica_mem_lock_mr, *local_area_lock;
 
 //Following are the functions to support RDMA operations:
 union ibv_gid get_gid(struct ibv_context *context);
@@ -115,17 +115,6 @@ struct context
 
 struct context *ctx;
 
-bool isClient(struct context *ctx){
-    if(ctx->id > NODE_CNT - REPLICA){
-        return true;
-    }
-}
-
-bool isPrimary(struct context *ctx){
-    if(ctx->id == 0){
-        return true;
-    }
-}
 
 static struct context *init_ctx(struct context *ctx, struct ibv_device *ib_dev)
 {
@@ -298,7 +287,7 @@ static int poll_cq(struct ibv_cq *cq, int num_completions)
                     perror("poll_recv_cq error");
                     exit(0);
                 }
-                //cout << wc[i].opcode << endl;
+                // cout << "DEBUG: Status of CAS " << wc[i].opcode << endl;
                 // cout << "DEBUG: Completed work request: " << wc[i].wr_id << endl;
             }
         }
@@ -370,9 +359,6 @@ int setup_buffers(struct context* ctx){
     setup_client_buffer(ctx);
     return 0;
 }
-
-
-
 
 /*
  *  *****Currently not in use*****
@@ -560,6 +546,8 @@ void post_atomic(struct context *ctx, int dest,
 	
     memset(&ctx->wr, 0, sizeof(ctx->wr));
 	ctx->wr.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
+    ctx->wr.send_flags |= IBV_SEND_FENCE;
+
 	if(signal){
 		ctx->wr.send_flags |= IBV_SEND_SIGNALED;
 	}
@@ -570,8 +558,9 @@ void post_atomic(struct context *ctx, int dest,
     ctx->wr.wr.atomic.remote_addr = remote_addr;
     ctx->wr.wr.atomic.rkey = remote_key;
     ctx->wr.wr.atomic.compare_add = compare;
-    ctx->wr.wr.atomic.swap = swap ;
+    ctx->wr.wr.atomic.swap = swap;
 	int ret = ibv_post_send(ctx->qp[dest], &ctx->wr, &bad_send_wr); //  &wrbatch[0]
+    // cout << "DEBUG: Atomic Send ret: " << ret << endl;
 	CPE(ret, "ibv_post_send error", ret);
 }
 
@@ -626,15 +615,17 @@ int rdma_remote_write(struct context *ctx, int dest, char *local_area, int lkey,
 void* rdma_local_read(struct context *ctx, void* local_area){
     return local_area;
 }
-int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey){
+int rdma_remote_read(struct context *ctx, int dest, char *local_area, int lkey, unsigned long remote_buf, int rkey, int size){
     // cout << "DEBUG: Reading remote" << endl;
-    post_read(ctx, dest, local_area, lkey, remote_buf, rkey, 1, MSG_SIZE);
+    post_read(ctx, dest, local_area, lkey, remote_buf, rkey, 1, size);
     // cout << "DEBUG: Polling for completions" << endl;
     return poll_cq(ctx->cq[dest], 1);
 }
 
-void rdma_cas(struct context *ctx, int dest, char *local_addr, int local_key, unsigned long remote_addr, int remote_key, char compare, char swap){
+bool rdma_cas(struct context *ctx, int dest, char *local_addr, int local_key, unsigned long remote_addr, int remote_key, char compare, char swap){
     post_atomic(ctx, dest, local_addr, local_key, remote_addr, remote_key, compare, swap, 1, 8);
+    poll_cq(ctx->cq[0], 1);
+    return (int)local_addr[0] == (int)compare;
 }
 
 // char* remote_read(int dest, int client,int flag){

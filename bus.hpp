@@ -375,28 +375,28 @@ int node(const int argc, const char **argv, struct context *ctx)
     one.join();
     two.join();
     //DEBUG
-    cout << "DEBUG: client_area stags:" << endl;
+    // cout << "DEBUG: client_area stags:" << endl;
 
-    for (int i = 0; i < NODE_CNT; i++)
-    {
-        if (i == id)
-            continue;
-        print_stag(client_req_stag[i]);
-    }
-    cout << "DEBUG: signed_area stags:" << endl;
-    for (int i = 0; i < NODE_CNT; i++)
-    {
-        if (i == id)
-            continue;
-        print_stag(signed_req_stag[i]);
-    }
-    cout << "DEBUG: replica_area stags:" << endl;
-    for (int i = 0; i < NODE_CNT; i++)
-    {
-        if (i == id)
-            continue;
-        print_stag(replica_mem_stag[i]);
-    }
+    // for (int i = 0; i < NODE_CNT; i++)
+    // {
+    //     if (i == id)
+    //         continue;
+    //     print_stag(client_req_stag[i]);
+    // }
+    // cout << "DEBUG: signed_area stags:" << endl;
+    // for (int i = 0; i < NODE_CNT; i++)
+    // {
+    //     if (i == id)
+    //         continue;
+    //     print_stag(signed_req_stag[i]);
+    // }
+    // cout << "DEBUG: replica_area stags:" << endl;
+    // for (int i = 0; i < NODE_CNT; i++)
+    // {
+    //     if (i == id)
+    //         continue;
+    //     print_stag(replica_mem_stag[i]);
+    // }
     //DEBUG
     for (int i = 0; i < NODE_CNT ; i++){
         if (i == id){
