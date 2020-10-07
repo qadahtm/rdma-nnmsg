@@ -322,7 +322,7 @@ int node(const int argc, const char **argv, struct context *ctx)
     signed_req_stag[id].size = MSG_SIZE;
     signed_req_stag[id].id = id;
 
-    for(int i = 0; i< NODE_CNT; i++){
+    for(int i = 0; i< NODE_CNT ; i++){
         client_req_stag[id].rkey[i] = client_req_mr[i]->rkey;
         client_req_stag[id].buf[i] = (uintptr_t) client_req_[i];
     }

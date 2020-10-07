@@ -11,9 +11,10 @@ struct msg{
     unsigned int seq;
 	char *buf;
 };
+
 struct msg* create_message(char *buf, long long seq){
 	struct msg *temp = (struct msg *) malloc(sizeof(struct msg));
-	temp->buf = (char *)malloc(227);
+	temp->buf = (char *)malloc(MSG_SIZE - 8 - 21);
 	strcpy(temp->buf, buf);
 	temp->seq = seq;
 	return temp;
@@ -27,19 +28,19 @@ char * get_message(struct msg *temp){
 }
 
 char * serialise(struct msg *temp){
-    char *buf = temp -> buf;
-    unsigned int seq = temp->seq;
+    unsigned int seq = get_sequence(temp);
+    char *buf = get_message(temp);
     char seq_buf[21];
     sprintf(seq_buf, "%u", seq);
-    char* to_return = (char *)malloc(248);
-    memset(to_return, 0, 248);
+    char* to_return = (char *)malloc(MSG_SIZE - 8);
+    memset(to_return, 0, MSG_SIZE - 8);
     strcpy(to_return, seq_buf);
     strcpy(to_return + 21, buf);
     return to_return;
 }
 
 struct msg* deserialize(char *temp){
-    unsigned int temp_s = strtoull(temp + 8, 0, 0);
-    char *buf = (temp + 29);
+    unsigned int temp_s = strtoull(temp, 0, 0);
+    char *buf = (temp + 21);
     return create_message(buf, temp_s);
 }

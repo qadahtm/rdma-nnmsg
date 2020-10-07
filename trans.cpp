@@ -6,6 +6,10 @@
 
 using namespace std::chrono;
 
+bool local_cas(char a, int c, int s){
+	return (__sync_val_compare_and_swap(&a, c, s) == (u_char)c);
+}
+
 long long getTime(){
 	milliseconds ms = duration_cast< milliseconds >(
         system_clock::now().time_since_epoch()
@@ -20,59 +24,117 @@ int start_time = 0, final_time = 0;
 //3. replica.replica_mem <- Primary.signed_req_mem : remote read thread DONE
 //4. client.rep_mem <- replica.rep_mem : Write Thread DONE
 
-// void reader(struct context *ctx){
-// 	if(ctx->id != 0 and ctx->id != 4){
-// 		while(replica_mem_area[0][0] == 0)
-// 			rdma_remote_read(ctx, 0, replica_mem_area[0], replica_mem_mr[0]->lkey, signed_req_stag[0].buf[0], signed_req_stag[0].rkey[0]);
-// 		cout << "This is " << ctx->id << " with message " << get_message(replica_mem_area[0]) << endl;
-// 		rdma_remote_write(ctx, 4, replica_mem_area[0], replica_mem_mr[0]->lkey, replica_mem_stag[4].buf[ctx->id], replica_mem_stag[4].rkey[ctx->id]);
-// 	}
-// 	if(ctx->id == 4){
-// 		for(int i = 1; i < NODE_CNT - 1; i++){
-// 			while(replica_mem_area[i][0] == 0){
-// 				continue;
-// 			}
-// 			cout << "Recieved message from node" << i << " " << get_message(replica_mem_area[i]) << endl;
-// 		}
-// 	}
-// }
+void generate_request(int seq_id, char *addr){
+	char *sbuf = serialise(create_message("Message", seq_id));
+	memcpy(addr, sbuf, MSG_SIZE);
+}
+//Do not put the lock in this function in addr (start the pointer from 8th address)
+char* check_request(char *addr){
+	struct msg* tmsg = deserialize(addr);
+	cout << "DEBUG: " << get_message(tmsg);
+	return get_message(tmsg);
+}
 
-// void writer(struct context *ctx){
-// 	if(ctx->id == 4){
-// 		char* curr_msg = create_message("Message", 0);
-// 		cout << get_sequence(curr_msg) << get_message(curr_msg)<< endl;
-// 		strcpy(local_area, curr_msg);
-// 		rdma_remote_write(ctx, 0, local_area, local_area_mr->lkey, client_req_stag[0].buf[ctx->id], client_req_stag[0].rkey[ctx->id]);
-// 		cout << "CLIENT: Message written on Primary " << get_message(local_area) << endl;
-// 	}
-// 	if(ctx->id == 0){
-// 		while(client_req_[4][0] == 0){
-// 			continue;
-// 		}
-// 		strcpy(signed_req_area[ctx->id],client_req_[4]);
-// 		cout << "Signed message: " << get_message(client_req_[4]) << "to: " << get_message(signed_req_area[ctx->id]) << endl; 
-// 		sleep(1);
-// 	}
-// }
-
-void singleThreadTest(struct context *ctx){
-	if(ctx->id == 1){
-		bool var = false;
-		while(var == false){
-			var = rdma_cas(ctx, 0, local_area, local_area_mr->lkey, client_req_stag[0].buf[0], client_req_stag[0].rkey[0], 0, 1);
+void reader(struct context *ctx){
+	cout << "Reader Working" << endl;
+	sleep(10);
+}
+/*CAS:
+0: No Message
+1: Message
+2: Locked
+*/
+std::mutex bufMTX;
+void rsend(struct context *ctx){
+	for(int dest = 0; dest < NODE_CNT; dest++){
+		if(dest == ctx->id){
+			continue;
 		}
-		rdma_remote_read(ctx, 0, local_area, local_area_mr->lkey, client_req_stag[0].buf[0], client_req_stag[0].rkey[0], MSG_SIZE);
-		cout << get_message(deserialize(local_area)) << " :DEBUG: " << get_sequence(deserialize(local_area)) << endl;
-	}
-	if(ctx->id == 0){
-		struct msg* temp = create_message("Message LOL", 123);
-    	char *sbuf = serialise(temp);
-		memcpy(client_req_[0] + 8, sbuf, 248);
-		cout << get_message(deserialize(client_req_[0])) << " :DEBUG: " << get_sequence(deserialize(client_req_[0])) << endl;
-		sleep(2);
-		cout << "CAS Value:" << (int)client_req_[0][0] << endl;
+		bufMTX.lock();
+		char *buf = (char *)malloc(MSG_SIZE - 8);
+		sprintf(buf, "Message %d", ctx->id);
+		memcpy(client_req_[dest], buf, MSG_SIZE - 8);
+		while(!rdma_cas(ctx, dest, cas_area, cas_area_mr->lkey, signed_req_stag[dest].buf[ctx->id], signed_req_stag[dest].rkey[ctx->id], 0, 2)){
+			continue;
+		}
+		memset(cas_area, 0, MSG_SIZE);
+		rdma_remote_write(ctx, dest, client_req_[dest], client_req_mr[dest]->lkey, (signed_req_stag[dest].buf[ctx->id] + 8), signed_req_stag[dest].rkey[ctx->id], MSG_SIZE - 8);
+		while(!rdma_cas(ctx, dest, cas_area, cas_area_mr->lkey, signed_req_stag[dest].buf[ctx->id], signed_req_stag[dest].rkey[ctx->id], 2, 1)){
+			continue;
+		}
+		bufMTX.unlock();
 	}
 }
+
+void rrecv(struct context *ctx){
+	sleep(5);
+	int i = 0;
+	while(i < NODE_CNT){
+		if(ctx->id == i){
+			i++;
+			continue;
+		}
+		char *buf = (char *)malloc(MSG_SIZE);
+		strcpy(buf, signed_req_area[i] + 8);
+		while(!local_cas(signed_req_area[i][0], 1, 0)){
+			continue;
+		}
+		cout << "DEBUG: SIGNED CAS RES: " << i << " " << (int)signed_req_area[i][0] << endl;
+		// cout << "DEBUG: SIGNED WRITE RES: " << i << " " << buf << endl;
+		fflush(stdout);
+		i++;
+	}
+	// uint32_t node = 0;
+    // char *buf;
+    // bool flag = false;
+    // fflush(stdout);
+	// int count = 0;
+    // while(flag == false && count < 4){
+    //     bufMTX.lock();
+    //     if(node == ctx->id){
+    //         node++;
+    //         continue;
+    //     }
+	// 	cout << "DEBUG: Trying to read: " << node << endl;
+    //     if(!local_cas(signed_req_area[node][0], 1, 2)){
+    //         node++;
+    //         if(node > 5){
+    //             node = 0;
+    //         }
+    //         continue;
+    //     }
+    //     else {
+    //         buf = (char *)malloc(MSG_SIZE - 8);
+    //         memcpy(buf, signed_req_area + 8, MSG_SIZE - 8);
+	// 		cout << buf << endl;
+    //         local_cas(signed_req_area[node][0], 2, 0);
+    //     }
+    //     bufMTX.unlock();
+    //     flag = true;
+	// 	count += 1;
+    // }
+    // cout <<"SP --> DEBUG: MSG RECVD" << endl;
+    // fflush(stdout);
+}
+
+// void singleThreadTest(struct context *ctx){
+// 	if(ctx->id == 1){
+// 		bool var = false;
+// 		while(var == false){
+// 			var = rdma_cas(ctx, 0, local_area, local_area_mr->lkey, client_req_stag[0].buf[0], client_req_stag[0].rkey[0], 0, 1);
+// 		}
+// 		rdma_remote_read(ctx, 0, local_area, local_area_mr->lkey, client_req_stag[0].buf[0], client_req_stag[0].rkey[0], MSG_SIZE);
+// 		// cout << get_message(deserialize(local_area)) << " :DEBUG: " << get_sequence(deserialize(local_area)) << endl;
+// 	}
+// 	if(ctx->id == 0){
+// 		struct msg* temp = create_message("Message LOL", 123);
+//     	char *sbuf = serialise(temp);
+// 		memcpy(client_req_[0] + 8, sbuf, 248);
+// 		// cout << get_message(deserialize(client_req_[0])) << " :DEBUG: " << get_sequence(deserialize(client_req_[0])) << endl;
+// 		sleep(2);
+// 		cout << "CAS Value:" << (int)client_req_[0][0] << endl;
+// 	}
+// }
 
 int main(const int argc, const char **argv)
 {
@@ -134,14 +196,14 @@ int main(const int argc, const char **argv)
 	
 	cout << "QPs Connected" << endl;
 	
-	singleThreadTest(ctx);
+	// singleThreadTest(ctx);
 	// if(ctx->id == 4){
 	// 	strcpy(req_area[0], "Message from the client");
 	// }
 
-	// thread remote_reader(reader, ctx);
-	// thread remote_writer(writer, ctx);
+	thread remote_reader(rsend, ctx);
+	thread remote_writer(rrecv, ctx);
 
-	// remote_reader.join();
-	// remote_writer.join();
+	remote_reader.join();
+	remote_writer.join();
 }
